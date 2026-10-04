@@ -178,7 +178,7 @@ bool KataGoEngine::initReal() {
 
         // 3) ConfigParser 读 gtp_example.cfg
         ctx_->cfg = std::make_unique<ConfigParser>();
-        ctx_->cfg->initialize(configPath_, /*keySupplied=*/false);
+        ctx_->cfg->initialize(configPath_);
         ctx_->logger->write("Config loaded: " + configPath_);
 
         // 4) Setup::initializeSession（处理 logDir/logFile 等通用配置）

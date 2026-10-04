@@ -71,11 +71,11 @@ if(USE_REAL_KATAGO)
     # ─── 头文件搜索路径 ─────────────────────────────────────────
     target_include_directories(katago PRIVATE
         ${KATAGO_SRC}/cpp
-        ${KATAGO_SRC}/external
-        ${KATAGO_SRC}/external/nlohmann_json
-        ${KATAGO_SRC}/external/half-2.2.0/include
-        ${KATAGO_SRC}/external/filesystem-1.5.8/include
-        ${KATAGO_SRC}/external/tclap-1.2.5/include
+        ${KATAGO_SRC}/cpp/external
+        ${KATAGO_SRC}/cpp/external/nlohmann_json
+        ${KATAGO_SRC}/cpp/external/half-2.2.0/include
+        ${KATAGO_SRC}/cpp/external/filesystem-1.5.8/include
+        ${KATAGO_SRC}/cpp/external/tclap-1.2.5/include
         ${EIGEN_SRC}
         ${CMAKE_CURRENT_BINARY_DIR}  # program/gitinfo.h 生成位置
     )
