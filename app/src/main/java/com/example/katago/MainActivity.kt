@@ -264,11 +264,12 @@ class MainActivity : Activity() {
             AiMode.AI_BLACK -> "AI 执黑"
         }
         val lm = gtp.board.lastMove()
-        val lastStr = when {
-            lm == null -&gt; "无"
-            lm[1] == -1 -&gt; "pass"
-            else -&gt; GtpEngine.coordToVertex(lm[1], lm[2], gtp.board.size)
-        }
+        val lastStr = lm?.let { m ->
+            when (m[1]) {
+                -1 -> "pass"
+                else -> GtpEngine.coordToVertex(m[1], m[2], gtp.board.size)
+            }
+        } ?: "无"
         statusText.text = "$modeStr | 回合:$turnStr | 提子 黑=${gtp.board.blackCaptured} 白=${gtp.board.whiteCaptured} | 上一手:$lastStr"
     }
 

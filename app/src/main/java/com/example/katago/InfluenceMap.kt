@@ -35,8 +35,8 @@ class InfluenceMap(private val size: Int) {
     )
 
     fun compute(board: Board): Result {
-        val cur = FloatArray(size * size)
-        val alt = FloatArray(size * size)
+        var cur = FloatArray(size * size)
+        var alt = FloatArray(size * size)
 
         // ─── 初始化 ─────────────────────────────────
         for (x in 0 until size) for (y in 0 until size) {

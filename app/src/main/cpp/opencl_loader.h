@@ -8,7 +8,7 @@
 // ───────────────────────────────────────────────────────────────
 class OpenCLLoader {
 public:
-    static OpenCLLoader&amp; instance();
+    static OpenCLLoader& instance();
 
     // 尝试从常见路径加载 libOpenCL.so。成功返回 true 且后续 available()=true。
     bool init();
