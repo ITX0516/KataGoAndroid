@@ -81,6 +81,25 @@ jobs:
           echo "ANDROID_HOME=${ANDROID_HOME}"
           echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
 
+      # ─── 签名：从 Secrets 解码 release keystore ─────────────────
+      - name: Decode release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$HOME/release.jks"
+            echo "KEYSTORE_PATH=$HOME/release.jks" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+            echo "keystore decoded: $(ls -lh $HOME/release.jks | awk '{print $5}')"
+          else
+            echo "WARNING: KEYSTORE_BASE64 secret not set, APK will be signed with default debug key"
+          fi
+
       # ─── EIGEN 模式：clone KataGo 源码 ──────────────────────────
       - name: Clone KataGo source (eigen mode)
         if: ${{ env.KATAGO_MODE == 'eigen' }}

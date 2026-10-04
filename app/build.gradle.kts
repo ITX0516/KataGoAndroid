@@ -53,8 +53,38 @@ android {
         }
     }
 
+    // ─── 签名配置 ───────────────────────────────────────────────
+    // CI 统一用 release keystore 签名（debug 和 release 都用同一个，
+    // 这样所有 CI 出的 APK 可以直接覆盖安装）。
+    // 本地开发时若未设置环境变量，自动回退到 Android 默认 debug 签名。
+    signingConfigs {
+        create("release") {
+            val ksPath = System.getenv("KEYSTORE_PATH")
+            val ksPass = System.getenv("KEYSTORE_PASSWORD")
+            val keyAlias = System.getenv("KEY_ALIAS")
+            val keyPass = System.getenv("KEY_PASSWORD")
+            if (ksPath != null && ksPass != null && keyAlias != null && keyPass != null
+                && file(ksPath).exists()) {
+                storeFile = file(ksPath)
+                storePassword = ksPass
+                this.keyAlias = keyAlias
+                keyPassword = keyPass
+                logger.lifecycle("[signing] using release keystore: $ksPath")
+            } else {
+                logger.warn("[signing] release keystore env vars not set, using default debug signing")
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            // 统一签名：debug 也用 release keystore（若可用）
+            signingConfig = signingConfigs.getByName("release").takeIf {
+                System.getenv("KEYSTORE_PATH") != null
+            }
+        }
         release {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
