@@ -100,8 +100,8 @@ jobs:
             echo "WARNING: KEYSTORE_BASE64 secret not set, APK will be signed with default debug key"
           fi
 
-      # ─── EIGEN 模式：clone KataGo 源码 ──────────────────────────
-      - name: Clone KataGo source (eigen mode)
+      # ─── EIGEN 模式：clone KataGo 源码 + 下载 Eigen 头文件 ──────
+      - name: Clone KataGo source and Eigen (eigen mode)
         if: ${{ env.KATAGO_MODE == 'eigen' }}
         run: |
           cd "$HOME"
@@ -109,10 +109,15 @@ jobs:
           echo "Cloning lightvector/KataGo @ ${KATAGO_REF} ..."
           git clone --depth 1 --branch "${KATAGO_REF}" \
             https://github.com/lightvector/KataGo.git KataGo
-          # Eigen 头文件在 KataGo/cpp/external/eigen-3.4.0
-          ls KataGo/cpp/external/ | head -20
-          test -d KataGo/cpp/external/eigen-3.4.0 && echo "Eigen found" || \
-            (echo "ERROR: Eigen not found at KataGo/cpp/external/eigen-3.4.0" && exit 1)
+
+          # KataGo 新版本不再内置 Eigen，需单独下载（header-only）
+          echo "Downloading Eigen 3.4.0 ..."
+          curl -fsSL -o eigen-3.4.0.tar.gz \
+            "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz"
+          tar xzf eigen-3.4.0.tar.gz
+          # EIGEN_SRC 指向含 Eigen/ 子目录的根
+          test -d eigen-3.4.0/Eigen && echo "Eigen ready: eigen-3.4.0/Eigen" || \
+            (echo "ERROR: Eigen/Eigen not found" && exit 1)
 
       # ─── EIGEN 模式：下载 KataGo 模型 ────────────────────────────
       - name: Download KataGo model (eigen mode)
@@ -139,7 +144,7 @@ jobs:
           BUILD_CMD="assemble${BUILD_TYPE^}"
           if [ "$KATAGO_MODE" = "eigen" ]; then
             KATAGO_SRC="$HOME/KataGo"
-            EIGEN_SRC="$KATAGO_SRC/cpp/external/eigen-3.4.0"
+            EIGEN_SRC="$HOME/eigen-3.4.0"
             gradle "$BUILD_CMD" \
               -PkatagoMode=eigen \
               -PkatagoSrc="$KATAGO_SRC" \
