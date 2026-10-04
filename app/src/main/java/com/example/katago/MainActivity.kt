@@ -170,7 +170,7 @@ class MainActivity : Activity() {
                 |
                 |>>> $winner +${"%.1f".format(margin)}
             """.trimMargin()
-            androidx.appcompat.app.AlertDialog.Builder(this)
+            android.app.AlertDialog.Builder(this)
                 .setTitle("终局结算")
                 .setMessage(msg)
                 .setPositiveButton("重开") { _, _ -> onReset() }
