@@ -52,14 +52,13 @@ if(USE_REAL_KATAGO)
     file(GLOB KATAGO_PROGRAM ${KATAGO_SRC}/cpp/program/*.cpp)
     file(GLOB KATAGO_DATAIO  ${KATAGO_SRC}/cpp/dataio/*.cpp)
     file(GLOB KATAGO_BOOK    ${KATAGO_SRC}/cpp/book/*.cpp)
-    set(KATAGO_MAIN_CPP ${KATAGO_SRC}/cpp/main.cpp)
+    # main.cpp 不需要——我们有自己的 JNI 入口 katago_engine.cpp
+    # command/*.cpp 也不需要——我们直接用 Setup/AsyncBot API
 
     # ─── 只保留 EIGEN 后端，排除其他 GPU/专用后端 ──────────────
-    # EIGEN 模式下只需要 eigenbackend.cpp，其他后端会引入 CUDA/OpenCL/Metal 等依赖
     list(FILTER KATAGO_NN EXCLUDE REGEX "cudabackend|cudautils|openclbackend|openclhelpers|openclkernels|opencltuner|metalbackend|rocmbackend|rocmutils|trtbackend|onnxbackend|onnxmodelbuilder|dummybackend")
 
     target_sources(katago PRIVATE
-        ${KATAGO_MAIN_CPP}
         ${KATAGO_CORE}
         ${KATAGO_GAME}
         ${KATAGO_NN}
@@ -67,6 +66,7 @@ if(USE_REAL_KATAGO)
         ${KATAGO_PROGRAM}
         ${KATAGO_DATAIO}
         ${KATAGO_BOOK}
+        # 不加 main.cpp（我们有自己的 JNI 入口）
         # 不加 command/*.cpp（GTP 命令处理我们自己在 katago_engine.cpp 里做）
         # 不加 distributed/*.cpp（在线训练，APK 不需要）
         # 不加 tests/*.cpp
