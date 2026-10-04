@@ -22,16 +22,26 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags += "-std=c++17"
-                // ─── 构建模式开关 ───────────────────────────────────────
+                // ─── 构建模式开关（通过 Gradle 属性切换）─────────────────
+                // 支持两种调用方式：
+                //   1) 本地编辑：解开下面 3 行注释，把路径换成你本地的
+                //   2) CI/命令行：gradle assembleDebug -PkatagoMode=eigen \
+                //                   -PkatagoSrc=/path/to/KataGo \
+                //                   -PeigenSrc=/path/to/eigen-3.4.0
+                //
                 // 默认 STUB 模式：不需要 KataGo 源码即可编译跑通。
-                //
-                // 接入真 KataGo（EIGEN CPU 后端，karino2 已验证路径）时，
-                // 解开下面 3 行注释，把路径换成你本地的：
-                //   arguments += "-DUSE_REAL_KATAGO=ON"
-                //   arguments += "-DKATAGO_SRC=/path/to/KataGo"        // lightvector/KataGo 仓库根
-                //   arguments += "-DEIGEN_SRC=/path/to/eigen-3.4.0"    // Eigen 头文件根
-                //
                 // 详见 BUILDING.md
+                val katagoMode = properties["katagoMode"]?.toString() ?: "stub"
+                if (katagoMode == "eigen") {
+                    val katagoSrc = properties["katagoSrc"]?.toString()
+                        ?: error("katagoMode=eigen requires -PkatagoSrc=/path/to/KataGo")
+                    val eigenSrc = properties["eigenSrc"]?.toString()
+                        ?: "$katagoSrc/cpp/external/eigen-3.4.0"
+                    arguments += "-DUSE_REAL_KATAGO=ON"
+                    arguments += "-DKATAGO_SRC=$katagoSrc"
+                    arguments += "-DEIGEN_SRC=$eigenSrc"
+                    logger.lifecycle("KataGo EIGEN mode: KATAGO_SRC=$katagoSrc")
+                }
             }
         }
     }

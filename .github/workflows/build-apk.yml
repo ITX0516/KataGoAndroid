@@ -1,0 +1,157 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: '构建模式'
+        type: choice
+        options:
+          - stub
+          - eigen
+        default: stub
+        required: true
+      build_type:
+        description: '构建类型'
+        type: choice
+        options:
+          - debug
+          - release
+        default: debug
+        required: true
+      katago_ref:
+        description: 'KataGo 分支/tag（仅 eigen 模式）'
+        default: 'v1.18.2'
+        required: false
+
+permissions:
+  contents: read
+
+# 取消同一分支/PR 上正在运行的旧构建
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build APK (${{ inputs.build_mode || 'stub' }})
+    runs-on: ubuntu-latest
+
+    env:
+      KATAGO_MODE: ${{ inputs.build_mode || 'stub' }}
+      BUILD_TYPE: ${{ inputs.build_type || 'debug' }}
+      JAVA_VERSION: '17'
+      ANDROID_API: '34'
+      BUILD_TOOLS: '34.0.0'
+      NDK_VERSION: '26.1.10909125'
+      CMAKE_VERSION: '3.22.1'
+      GRADLE_VERSION: '8.5'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+
+      - name: Set up Gradle ${{ env.GRADLE_VERSION }}
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+          cache-disabled: false
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK components
+        run: |
+          sdkmanager --install "platform-tools"
+          sdkmanager --install "platforms;android-${ANDROID_API}"
+          sdkmanager --install "build-tools;${BUILD_TOOLS}"
+          sdkmanager --install "ndk;${NDK_VERSION}"
+          sdkmanager --install "cmake;${CMAKE_VERSION}"
+          yes | sdkmanager --licenses || true
+          echo "ANDROID_HOME=${ANDROID_HOME}"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      # ─── EIGEN 模式：clone KataGo 源码 ──────────────────────────
+      - name: Clone KataGo source (eigen mode)
+        if: ${{ env.KATAGO_MODE == 'eigen' }}
+        run: |
+          cd "$HOME"
+          KATAGO_REF="${{ inputs.katago_ref || 'v1.18.2' }}"
+          echo "Cloning lightvector/KataGo @ ${KATAGO_REF} ..."
+          git clone --depth 1 --branch "${KATAGO_REF}" \
+            https://github.com/lightvector/KataGo.git KataGo
+          # Eigen 头文件在 KataGo/cpp/external/eigen-3.4.0
+          ls KataGo/cpp/external/ | head -20
+          test -d KataGo/cpp/external/eigen-3.4.0 && echo "Eigen found" || \
+            (echo "ERROR: Eigen not found at KataGo/cpp/external/eigen-3.4.0" && exit 1)
+
+      # ─── EIGEN 模式：下载 KataGo 模型 ────────────────────────────
+      - name: Download KataGo model (eigen mode)
+        if: ${{ env.KATAGO_MODE == 'eigen' }}
+        run: |
+          mkdir -p app/src/main/assets/models
+          MODEL_URL="https://katagotraining.org/networks/b10c384.bin.gz"
+          echo "Downloading b10c384 model..."
+          curl -fsSL -o /tmp/b10c384.bin.gz "${MODEL_URL}" || {
+            echo "Download failed, trying direct .bin URL..."
+            curl -fsSL -o app/src/main/assets/models/b10c384.bin \
+              "https://katagotraining.org/networks/b10c384.bin"
+          }
+          if [ -f /tmp/b10c384.bin.gz ]; then
+            gunzip -c /tmp/b10c384.bin.gz > app/src/main/assets/models/b10c384.bin
+          fi
+          ls -lh app/src/main/assets/models/
+
+      # ─── 构建 APK ───────────────────────────────────────────────
+      - name: Build APK
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
+        run: |
+          BUILD_CMD="assemble${BUILD_TYPE^}"
+          if [ "$KATAGO_MODE" = "eigen" ]; then
+            KATAGO_SRC="$HOME/KataGo"
+            EIGEN_SRC="$KATAGO_SRC/cpp/external/eigen-3.4.0"
+            gradle "$BUILD_CMD" \
+              -PkatagoMode=eigen \
+              -PkatagoSrc="$KATAGO_SRC" \
+              -PeigenSrc="$EIGEN_SRC"
+          else
+            gradle "$BUILD_CMD"
+          fi
+
+      - name: Verify APK output
+        run: |
+          APK_DIR="app/build/outputs/apk/${BUILD_TYPE}"
+          echo "APK directory: ${APK_DIR}"
+          ls -lh "${APK_DIR}"/*.apk 2>/dev/null || {
+            echo "ERROR: No APK found in ${APK_DIR}"
+            exit 1
+          }
+
+      # ─── 上传 artifact ──────────────────────────────────────────
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: katago-${{ env.KATAGO_MODE }}-${{ env.BUILD_TYPE }}
+          path: app/build/outputs/apk/${{ env.BUILD_TYPE }}/*.apk
+          retention-days: 30
+
+      - name: Upload build logs (on failure)
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ env.KATAGO_MODE }}-${{ env.BUILD_TYPE }}
+          path: |
+            app/build/outputs/apk/**/*.txt
+            **/*.log
+          retention-days: 7
