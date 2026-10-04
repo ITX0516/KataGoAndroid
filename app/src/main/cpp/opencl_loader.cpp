@@ -1,7 +1,7 @@
 #include "opencl_loader.h"
 
-#include &lt;android/log.h&gt;
-#include &lt;dlfcn.h&gt;
+#include <android/log.h>
+#include <dlfcn.h>
 
 #define TAG "OpenCLLoader"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)

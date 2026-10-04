@@ -6,9 +6,9 @@
 // handle 用 jlong 承载 C++ 指针，避免反复查找，也避免把对象指针
 // 装进 Java 域引发的 GC/生命周期混乱。
 // ───────────────────────────────────────────────────────────────
-#include &lt;jni.h&gt;
+#include <jni.h>
 
-#include &lt;android/log.h&gt;
+#include <android/log.h>
 
 #include "katago_engine.h"
 #include "opencl_loader.h"
@@ -25,16 +25,16 @@ extern "C" {
 JNIEXPORT jlong JNICALL
 Java_com_example_katago_KataGoEngine_nativeInit(
         JNIEnv* env, jobject /*thiz*/, jstring modelPath, jstring configPath) {
-    const char* model  = modelPath  ? env-&gt;GetStringUTFChars(modelPath,  nullptr) : "";
-    const char* config = configPath ? env-&gt;GetStringUTFChars(configPath, nullptr) : "";
+    const char* model  = modelPath  ? env->GetStringUTFChars(modelPath,  nullptr) : "";
+    const char* config = configPath ? env->GetStringUTFChars(configPath, nullptr) : "";
 
     auto* engine = new KataGoEngine(model, config);
 
-    if (modelPath)  env-&gt;ReleaseStringUTFChars(modelPath,  model);
-    if (configPath) env-&gt;ReleaseStringUTFChars(configPath, config);
+    if (modelPath)  env->ReleaseStringUTFChars(modelPath,  model);
+    if (configPath) env->ReleaseStringUTFChars(configPath, config);
 
-    LOGI("engine constructed, handle=%p", static_cast&lt;void*&gt;(engine));
-    return reinterpret_cast&lt;jlong&gt;(engine);
+    LOGI("engine constructed, handle=%p", static_cast<void*>(engine));
+    return reinterpret_cast<jlong>(engine);
 }
 
 // 生成一手棋。返回 x*boardSize+y；-1 pass；-2 resign。
@@ -42,24 +42,24 @@ JNIEXPORT jint JNICALL
 Java_com_example_katago_KataGoEngine_nativeGenmove(
         JNIEnv* env, jobject /*thiz*/, jlong handle, jint boardSize, jint toMove,
         jintArray moveHistory) {
-    auto* engine = reinterpret_cast&lt;KataGoEngine*&gt;(handle);
+    auto* engine = reinterpret_cast<KataGoEngine*>(handle);
     if (!engine) {
         LOGE("genmove on null engine");
         return -2;
     }
 
-    jsize n = moveHistory ? env-&gt;GetArrayLength(moveHistory) : 0;
+    jsize n = moveHistory ? env->GetArrayLength(moveHistory) : 0;
     if (n % 3 != 0) {
         LOGE("moveHistory length not multiple of 3: %d", n);
         return -2;
     }
 
-    jint* moves = (n &gt; 0) ? env-&gt;GetIntArrayElements(moveHistory, nullptr) : nullptr;
-    int move = engine-&gt;genmove(boardSize, toMove,
-                               reinterpret_cast&lt;const int*&gt;(moves), n / 3);
+    jint* moves = (n > 0) ? env->GetIntArrayElements(moveHistory, nullptr) : nullptr;
+    int move = engine->genmove(boardSize, toMove,
+                               reinterpret_cast<const int*>(moves), n / 3);
     if (moves) {
         // JNI_ABORT：不回写 Java 侧，因为我们没改数组
-        env-&gt;ReleaseIntArrayElements(moveHistory, moves, JNI_ABORT);
+        env->ReleaseIntArrayElements(moveHistory, moves, JNI_ABORT);
     }
     return move;
 }
@@ -67,9 +67,9 @@ Java_com_example_katago_KataGoEngine_nativeGenmove(
 JNIEXPORT void JNICALL
 Java_com_example_katago_KataGoEngine_nativeDestroy(
         JNIEnv* /*env*/, jobject /*thiz*/, jlong handle) {
-    auto* engine = reinterpret_cast&lt;KataGoEngine*&gt;(handle);
+    auto* engine = reinterpret_cast<KataGoEngine*>(handle);
     delete engine;
-    LOGI("engine destroyed, handle=%p", static_cast&lt;void*&gt;(engine));
+    LOGI("engine destroyed, handle=%p", static_cast<void*>(engine));
 }
 
 }  // extern "C"
