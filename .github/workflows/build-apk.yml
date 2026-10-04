@@ -120,20 +120,17 @@ jobs:
             (echo "ERROR: Eigen/Eigen not found" && exit 1)
 
       # ─── EIGEN 模式：下载 KataGo 模型 ────────────────────────────
+      # 注意：CI 用一个小模型占位（lionffen b24c64），仅用于验证编译链路。
+      # 真机跑真 KataGo 请替换为 19x19 大模型（如 b18c384nbt），
+      # 放到 app/src/main/assets/models/b10c384.bin
       - name: Download KataGo model (eigen mode)
         if: ${{ env.KATAGO_MODE == 'eigen' }}
         run: |
           mkdir -p app/src/main/assets/models
-          MODEL_URL="https://katagotraining.org/networks/b10c384.bin.gz"
-          echo "Downloading b10c384 model..."
-          curl -fsSL -o /tmp/b10c384.bin.gz "${MODEL_URL}" || {
-            echo "Download failed, trying direct .bin URL..."
-            curl -fsSL -o app/src/main/assets/models/b10c384.bin \
-              "https://katagotraining.org/networks/b10c384.bin"
-          }
-          if [ -f /tmp/b10c384.bin.gz ]; then
-            gunzip -c /tmp/b10c384.bin.gz > app/src/main/assets/models/b10c384.bin
-          fi
+          MODEL_URL="https://media.katagotraining.org/uploaded/networks/models_extra/lionffen_b24c64_3x3_v3_12300.bin.gz"
+          echo "Downloading placeholder model (lionffen b24c64)..."
+          curl -fsSL -o /tmp/model.bin.gz "${MODEL_URL}"
+          gunzip -c /tmp/model.bin.gz > app/src/main/assets/models/b10c384.bin
           ls -lh app/src/main/assets/models/
 
       # ─── 构建 APK ───────────────────────────────────────────────
