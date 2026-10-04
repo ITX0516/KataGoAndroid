@@ -56,7 +56,7 @@ if(USE_REAL_KATAGO)
 
     # ─── 只保留 EIGEN 后端，排除其他 GPU/专用后端 ──────────────
     # EIGEN 模式下只需要 eigenbackend.cpp，其他后端会引入 CUDA/OpenCL/Metal 等依赖
-    list(FILTER KATAGO_NN EXCLUDE REGEX "cudabackend|cudautils|openclbackend|openclhelpers|openclkernels|opencltuner|metalbackend|rocmbackend|rocmutils|trtbackend|onnxbackend|onnxmodelbuilder")
+    list(FILTER KATAGO_NN EXCLUDE REGEX "cudabackend|cudautils|openclbackend|openclhelpers|openclkernels|opencltuner|metalbackend|rocmbackend|rocmutils|trtbackend|onnxbackend|onnxmodelbuilder|dummybackend")
 
     target_sources(katago PRIVATE
         ${KATAGO_MAIN_CPP}
