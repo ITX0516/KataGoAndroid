@@ -97,8 +97,16 @@ if(USE_REAL_KATAGO)
     target_link_libraries(katago ${z-lib})
 
     # ─── Threads ────────────────────────────────────────────────
-    find_library(threads-lib pthread)
-    target_link_libraries(katago ${threads-lib})
+    # Android NDK 的 libc 已内置 pthread，不需要单独链接。
+    # 非 Android 环境（如本地测试）才链接 pthread。
+    if(ANDROID)
+        set(threads-lib "")
+    else()
+        find_library(threads-lib pthread)
+    endif()
+    if(threads-lib)
+        target_link_libraries(katago ${threads-lib})
+    endif()
 
     # ─── 生成 program/gitinfo.h（KataGo 编译期需要）─────────────
     # 上游用 add_custom_command 生成，这里手动写一个最小版本
