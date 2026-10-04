@@ -69,10 +69,13 @@ class Board(val size: Int = 9) {
         return if (isTwoPasses()) GameOver.YES else GameOver.NO
     }
 
-    /** 当前应执子方：空棋盘黑先；非空且上一手非 pass 则换色；上一手 pass 则同色继续。 */
+    /**
+     * 当前应执子方：空棋盘黑先；每一手（无论落子还是 pass）后换手。
+     * 连续两手 pass 由 isTwoPasses() 判定终局，不影响 toMove 的换手逻辑。
+     */
     fun toMove(): Int {
         val last = history.lastOrNull() ?: return BLACK
-        return if (last[1] == -1) last[0] else 3 - last[0]
+        return 3 - last[0]
     }
 
     /** 是否双方连续 pass → 终局。 */
@@ -126,10 +129,10 @@ class Board(val size: Int = 9) {
                 }
             }
         }
-        _lastBlackScore = (blackStones + blackTerr).toFloat()
-        _lastWhiteScore = (whiteStones + whiteTerr).toFloat()
-        _lastDame = dame
-        return _lastBlackScore - _lastWhiteScore
+        lastBlackScore = (blackStones + blackTerr).toFloat()
+        lastWhiteScore = (whiteStones + whiteTerr).toFloat()
+        lastDame = dame
+        return lastBlackScore - lastWhiteScore
     }
 
     /** 中国数子最后一次的结果（黑分数）。 */
@@ -138,9 +141,6 @@ class Board(val size: Int = 9) {
     var lastWhiteScore: Float = 0f; private set
     /** 最后一次数子的单官数（debug 用）。 */
     var lastDame: Int = 0; private set
-    private var _lastBlackScore: Float = 0f
-    private var _lastWhiteScore: Float = 0f
-    private var _lastDame: Int = 0
 
     private fun floodEmpty(sx: Int, sy: Int, visited: Array<BooleanArray>): List<IntArray> {
         val out = ArrayList<IntArray>()

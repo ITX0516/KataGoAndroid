@@ -52,7 +52,14 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
+        AppLogger.init(this)
+        AppLogger.i("MainActivity", "onCreate boardSize=$boardSize aiMode=$aiMode")
+        try {
+            setContentView(R.layout.activity_main)
+        } catch (e: Throwable) {
+            AppLogger.e("MainActivity", "setContentView failed", e)
+            throw e
+        }
 
         gtp = GtpEngine().also { it.execute("boardsize $boardSize") }
 
@@ -106,29 +113,32 @@ class MainActivity : Activity() {
 
     // ─── 人落子 ────────────────────────────────────────────────
     private fun onTap(x: Int, y: Int) {
-        if (aiThinking) return
+        if (aiThinking) { AppLogger.w("MainActivity", "onTap ignored: aiThinking"); return }
         val color = gtp.board.toMove()
         if (color == Board.BLACK && aiMode == AiMode.AI_BLACK) return  // 轮到 AI
         if (color == Board.WHITE && aiMode == AiMode.AI_WHITE) return
 
         val r = gtp.board.play(color, x, y)
+        AppLogger.i("MainActivity", "onTap color=$color ($x,$y) -> $r")
         if (r != Board.Outcome.OK) {
             flash("非法落子: $r"); return
         }
-        if (showInfluence) boardView.showInfluence(null)   // 落子后清染色，等再点形势判断
+        if (showInfluence) boardView.showInfluence(null)
         boardView.refreshFrom(gtp.board)
         updateStatus()
         maybeAiMove()
     }
 
     private fun onPass() {
-        if (aiThinking) return
+        if (aiThinking) { AppLogger.w("MainActivity", "onPass ignored: aiThinking"); return }
         val color = gtp.board.toMove()
         if (color == Board.BLACK && aiMode == AiMode.AI_BLACK) return
         if (color == Board.WHITE && aiMode == AiMode.AI_WHITE) return
+        AppLogger.i("MainActivity", "onPass color=$color")
         val gameOver = gtp.board.pass(color)
         boardView.refreshFrom(gtp.board)
         if (gameOver == Board.GameOver.YES) {
+            AppLogger.i("MainActivity", "onPass -> game over (two passes)")
             showFinalScore()
             return
         }
@@ -138,33 +148,39 @@ class MainActivity : Activity() {
 
     /** 终局计分弹窗（中国数子 + 贴目）。 */
     private fun showFinalScore() {
-        val b = gtp.board
-        val komi = 6.5f
-        val diff = b.chineseScore()           // 不贴目差值（正=黑领先）
-        val blackTotal = b.lastBlackScore + komi
-        val whiteTotal = b.lastWhiteScore
-        val (winner, margin) = if (blackTotal > whiteTotal)
-            "黑" to (blackTotal - whiteTotal)
-        else
-            "白" to (whiteTotal - blackTotal)
-        val msg = """
-            |终局（双方 pass）
-            |
-            |黑：${b.lastBlackScore.toInt()} 子 + 贴目 $komi = ${"%.1f".format(blackTotal)}
-            |白：${b.lastWhiteScore.toInt()} 子
-            |单官：${b.lastDame} 点未数
-            |
-            |提子统计：黑提 ${b.blackCaptured} / 白提 ${b.whiteCaptured}
-            |
-            |>>> $winner +${"%.1f".format(margin)}
-        """.trimMargin()
-        androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("终局结算")
-            .setMessage(msg)
-            .setPositiveButton("重开") { _, _ -> onReset() }
-            .setNegativeButton("查看棋盘", null)
-            .show()
-        flash("$winner +${"%.1f".format(margin)}  (黑 ${b.lastBlackScore.toInt()}+${komi} vs 白 ${b.lastWhiteScore.toInt()})")
+        try {
+            val b = gtp.board
+            val komi = 6.5f
+            val diff = b.chineseScore()           // 不贴目差值（正=黑领先）
+            val blackTotal = b.lastBlackScore + komi
+            val whiteTotal = b.lastWhiteScore
+            AppLogger.i("MainActivity", "showFinalScore diff=$diff black=$blackTotal white=$whiteTotal dame=${b.lastDame}")
+            val (winner, margin) = if (blackTotal > whiteTotal)
+                "黑" to (blackTotal - whiteTotal)
+            else
+                "白" to (whiteTotal - blackTotal)
+            val msg = """
+                |终局（双方 pass）
+                |
+                |黑：${b.lastBlackScore.toInt()} 子 + 贴目 $komi = ${"%.1f".format(blackTotal)}
+                |白：${b.lastWhiteScore.toInt()} 子
+                |单官：${b.lastDame} 点未数
+                |
+                |提子统计：黑提 ${b.blackCaptured} / 白提 ${b.whiteCaptured}
+                |
+                |>>> $winner +${"%.1f".format(margin)}
+            """.trimMargin()
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("终局结算")
+                .setMessage(msg)
+                .setPositiveButton("重开") { _, _ -> onReset() }
+                .setNegativeButton("查看棋盘", null)
+                .show()
+            flash("$winner +${"%.1f".format(margin)}  (黑 ${b.lastBlackScore.toInt()}+${komi} vs 白 ${b.lastWhiteScore.toInt()})")
+        } catch (e: Throwable) {
+            AppLogger.e("MainActivity", "showFinalScore crashed", e)
+            flash("计分出错: ${e.message}")
+        }
     }
 
     /** 形势判断：用影响力函数给出当前局面胜率 + 染色。 */
@@ -197,6 +213,7 @@ class MainActivity : Activity() {
     /** 强制终局：立即按当前局面数子。 */
     private fun onForceEnd() {
         if (aiThinking) return
+        AppLogger.i("MainActivity", "onForceEnd moveCount=${gtp.board.moveCount()}")
         showFinalScore()
     }
 
@@ -234,21 +251,32 @@ class MainActivity : Activity() {
         aiThinking = true
         statusText.text = "AI 思考中…"
         val colorChar = if (gtp.board.toMove() == Board.BLACK) "b" else "w"
+        AppLogger.i("MainActivity", "aiMove start color=$colorChar moveCount=${gtp.board.moveCount()}")
         Thread {
-            // 这条调用链就是后续替换为 native 的入口：
-            //   gtp.gen = JniGen(KataGoEngine(...))
-            // 之后 gtp.execute("genmove b") 内部走的是 native，对外接口不变。
-            val resp = gtp.execute("genmove $colorChar")
-            // 留作 logcat 调试：观察 GTP 响应
-            android.util.Log.i("KataGoDemo", "genmove resp=$resp")
-            runOnUiThread {
-                aiThinking = false
-                boardView.refreshFrom(gtp.board)
-                if (gtp.board.isTwoPasses()) {
-                    showFinalScore()    // AI 也 pass → 终局
-                } else {
-                    updateStatus()
-                    maybeAiMove()       // 双方都是 AI 时继续
+            try {
+                val resp = gtp.execute("genmove $colorChar")
+                AppLogger.i("MainActivity", "aiMove genmove resp=$resp")
+                runOnUiThread {
+                    try {
+                        aiThinking = false
+                        boardView.refreshFrom(gtp.board)
+                        if (gtp.board.isTwoPasses()) {
+                            AppLogger.i("MainActivity", "aiMove -> two passes, game over")
+                            showFinalScore()
+                        } else {
+                            updateStatus()
+                            maybeAiMove()
+                        }
+                    } catch (e: Throwable) {
+                        AppLogger.e("MainActivity", "aiMove ui-thread crashed", e)
+                        aiThinking = false
+                    }
+                }
+            } catch (e: Throwable) {
+                AppLogger.e("MainActivity", "aiMove genmove crashed", e)
+                runOnUiThread {
+                    aiThinking = false
+                    flash("AI 出错: ${e.message}")
                 }
             }
         }.start()
