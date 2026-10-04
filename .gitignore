@@ -1,0 +1,32 @@
+# Build outputs
+build/
+.gradle/
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Local config
+local.properties
+signing.properties
+
+# IDE
+.idea/
+*.iml
+*.iws
+.vscode/
+
+# Native build intermediates
+.cxx/
+app/.cxx/
+
+# Logs / runtime
+*.log
+captures/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test intermediates
+logic-test/build/

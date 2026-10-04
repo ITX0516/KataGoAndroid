@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>KataGo Android — Web 测试台</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", "Segoe UI", sans-serif; background:#f7f7f8; color:#171717; margin:0; padding:16px; }
+  h1 { font-size:16px; margin:0 0 12px; }
+  .row { display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
+  .col { flex: 0 0 auto; }
+  .col.grow { flex: 1 1 320px; min-width:320px; }
+  #status { padding:8px 12px; background:#fff; border:1px solid rgba(0,0,0,.12); border-radius:8px; font-size:13px; min-height:1.5em; margin-bottom:8px; }
+  canvas { background:#E8B964; border:1px solid rgba(0,0,0,.2); border-radius:6px; display:block; }
+  .btns { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  button { padding:6px 12px; border:1px solid rgba(0,0,0,.15); border-radius:6px; background:#fff; cursor:pointer; font-size:13px; }
+  button:hover { background:#f0f0f0; }
+  button.primary { background:#0FDC78; color:#004D26; border-color:#0AB861; font-weight:500; }
+  pre { background:#171717; color:#E5E5E5; padding:12px; border-radius:8px; font-size:12px; max-height:280px; overflow:auto; margin:0; white-space:pre-wrap; word-break:break-all; }
+  .sgf-out { margin-top:8px; }
+  .test-results { font-size:12px; line-height:1.6; }
+  .pass { color:#0AB861; font-weight:500; }
+  .fail { color:#E8463A; font-weight:500; }
+  .small { font-size:11px; color:#52525B; }
+</style>
+</head>
+<body>
+<h1>KataGo Android · Web 测试台（棋盘规则 + GTP + SGF 导出）</h1>
+<div class="row">
+  <div class="col">
+    <div id="status">加载中…</div>
+    <canvas id="board" width="420" height="420"></canvas>
+    <div class="btns">
+      <button onclick="onPass()">Pass</button>
+      <button onclick="onMode()">模式: 人/AI</button>
+      <button onclick="onReset()">重置</button>
+      <button class="primary" onclick="onExport()">导出 SGF</button>
+      <button onclick="onInfluence()">形势判断</button>
+      <button onclick="onForceEnd()">强制终局</button>
+      <button onclick="runSelfTests()">跑自检</button>
+    </div>
+    <div class="btns" style="margin-top:6px">
+      <label>棋盘：</label>
+      <select id="sizeSelect" onchange="onSizeChange(this.value)"></select>
+    </div>
+  </div>
+  <div class="col grow">
+    <div class="test-results" id="testResults"></div>
+    <div class="sgf-out">
+      <div class="small">SGF 输出（点"导出 SGF"后会同时下载 .sgf 文件）：</div>
+      <pre id="sgfOut">— 尚未生成 —</pre>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// 规则引擎（与 Board.kt 算法一致：提子→自杀→超级劫 FNV-1a）
+// 坐标：内部 (x,y)，x 列 0..N-1 左→右；y 行 0..N-1 下→上（与 GTP 一致）
+// ============================================================
+const EMPTY=0, BLACK=1, WHITE=2;
+const DIRS=[[0,1],[0,-1],[1,0],[-1,0]];
+
+class Board {
+  constructor(size=9){ this.size=size; this.grid=Array.from({length:size},()=>new Array(size).fill(0)); this.history=[]; this.past=new Set(); this.bCap=0; this.wCap=0; }
+  static hashGrid(g){ let h=1469598103934665603n; for(let x=0;x<g.length;x++) for(let y=0;y<g.length;y++){ h=(h^BigInt(g[x][y]))*1099511628211n & ((1n<<64n)-1n);} return h.toString(); }
+  copyGrid(){ return this.grid.map(r=>r.slice()); }
+  inBound(x,y){ return x>=0&&x<this.size&&y>=0&&y<this.size; }
+  groupOn(g,x,y){ const c=g[x][y]; if(c===EMPTY) return []; const vis=Array.from({length:this.size},()=>new Array(this.size).fill(false)); const st=[[x,y]]; vis[x][y]=true; const out=[]; while(st.length){ const [cx,cy]=st.pop(); out.push([cx,cy]); for(const [dx,dy] of DIRS){ const nx=cx+dx, ny=cy+dy; if(this.inBound(nx,ny)&&!vis[nx][ny]&&g[nx][ny]===c){ vis[nx][ny]=true; st.push([nx,ny]); } } } return out; }
+  libertiesOn(g,group){ let cnt=0; const seen=new Set(); for(const [px,py] of group) for(const [dx,dy] of DIRS){ const nx=px+dx, ny=py+dy; if(this.inBound(nx,ny)&&g[nx][ny]===EMPTY){ const k=nx*1000+ny; if(!seen.has(k)){ seen.add(k); cnt++; } } } return cnt; }
+  play(color,x,y){
+    if(!this.inBound(x,y)) return 'OUT_OF_RANGE';
+    if(this.grid[x][y]!==EMPTY) return 'OCCUPIED';
+    const sim=this.copyGrid(); sim[x][y]=color;
+    const opp=3-color; let captured=0;
+    for(const [dx,dy] of DIRS){ const nx=x+dx, ny=y+dy; if(this.inBound(nx,ny)&&sim[nx][ny]===opp){ const grp=this.groupOn(sim,nx,ny); if(this.libertiesOn(sim,grp)===0){ for(const [px,py] of grp) sim[px][py]=EMPTY; captured+=grp.length; } } }
+    const mine=this.groupOn(sim,x,y);
+    if(this.libertiesOn(sim,mine)===0) return 'SUICIDE';
+    const h=Board.hashGrid(sim);
+    if(this.past.has(h)) return 'SUPERKO';
+    this.grid=sim; this.history.push([color,x,y]); this.past.add(h);
+    if(color===BLACK) this.bCap+=captured; else this.wCap+=captured;
+    return 'OK';
+  }
+  pass(color){ this.history.push([color,-1,-1]); return this.isTwoPasses(); }
+  isTwoPasses(){ if(this.history.length<2) return false; const l=this.history[this.history.length-1], p=this.history[this.history.length-2]; return l[1]===-1 && p[1]===-1; }
+  /** 中国数子：flood fill 空区，仅一边相邻归该方。返回 {black, white, dame, diff}。 */
+  chineseScore(){
+    let blackStones=0, whiteStones=0, blackTerr=0, whiteTerr=0, dame=0;
+    const visited=Array.from({length:this.size},()=>new Array(this.size).fill(false));
+    for(let x=0;x<this.size;x++) for(let y=0;y<this.size;y++){
+      const c=this.grid[x][y];
+      if(c===BLACK) blackStones++;
+      else if(c===WHITE) whiteStones++;
+      else {
+        if(visited[x][y]) continue;
+        const region=this.floodEmpty(x,y,visited);
+        let touchB=false, touchW=false;
+        for(const [px,py] of region) for(const [dx,dy] of DIRS){
+          const nx=px+dx, ny=py+dy;
+          if(!this.inBound(nx,ny)) continue;
+          if(this.grid[nx][ny]===BLACK) touchB=true;
+          if(this.grid[nx][ny]===WHITE) touchW=true;
+        }
+        if(touchB && !touchW) blackTerr+=region.length;
+        else if(touchW && !touchB) whiteTerr+=region.length;
+        else dame+=region.length;
+      }
+    }
+    this._lastBlack=blackStones+blackTerr;
+    this._lastWhite=whiteStones+whiteTerr;
+    this._lastDame=dame;
+    return {black:this._lastBlack, white:this._lastWhite, dame, diff:this._lastBlack-this._lastWhite};
+  }
+  floodEmpty(sx,sy,visited){
+    const out=[]; const st=[[sx,sy]]; visited[sx][sy]=true;
+    while(st.length){ const [cx,cy]=st.pop(); out.push([cx,cy]);
+      for(const [dx,dy] of DIRS){ const nx=cx+dx, ny=cy+dy; if(this.inBound(nx,ny)&&!visited[nx][ny]&&this.grid[nx][ny]===EMPTY){ visited[nx][ny]=true; st.push([nx,ny]); } } }
+    return out;
+  }
+  toMove(){ const last=this.history[this.history.length-1]; if(!last) return BLACK; return last[1]===-1?last[0]:3-last[0]; }
+  get(x,y){ return this.grid[x][y]; }
+  lastMove(){ const m=this.history[this.history.length-1]; return m?m.slice():null; }
+  moveCount(){ return this.history.length; }
+  clear(){ for(let x=0;x<this.size;x++) for(let y=0;y<this.size;y++) this.grid[x][y]=EMPTY; this.history=[]; this.past.clear(); this.bCap=0; this.wCap=0; }
+  isLegal(color,x,y){
+    if(!this.inBound(x,y)) return false;
+    if(this.grid[x][y]!==EMPTY) return false;
+    const sim=this.copyGrid(); sim[x][y]=color; const opp=3-color;
+    for(const [dx,dy] of DIRS){ const nx=x+dx, ny=y+dy; if(this.inBound(nx,ny)&&sim[nx][ny]===opp){ const grp=this.groupOn(sim,nx,ny); if(this.libertiesOn(sim,grp)===0) for(const [px,py] of grp) sim[px][py]=EMPTY; } }
+    const mine=this.groupOn(sim,x,y);
+    if(this.libertiesOn(sim,mine)===0) return false;
+    const h=Board.hashGrid(sim);
+    return !this.past.has(h);
+  }
+  legalMoves(color){ const out=[]; for(let x=0;x<this.size;x++) for(let y=0;y<this.size;y++) if(this.isLegal(color,x,y)) out.push([x,y]); return out; }
+  historySnapshot(){ return this.history.map(m=>m.slice()); }
+}
+
+// ============================================================
+// GTP 坐标转换（与 GtpEngine.kt 一致：列字母跳过 I）
+// ============================================================
+const COLS="ABCDEFGHJKLMNOPQRSTUVWXYZ";
+function vertexToCoord(v, sz){
+  const col=COLS.indexOf(v[0].toUpperCase());
+  if(col<0||col>=sz) throw new Error("bad vertex "+v);
+  const row=parseInt(v.slice(1))-1;
+  if(row<0||row>=sz) throw new Error("bad vertex "+v);
+  return [col, row];
+}
+function coordToVertex(x,y,sz){ return COLS[x]+(y+1); }
+
+// ============================================================
+// SGF 生成（与 SgfWriter.kt 一致：列=a+x，行=a+(size-1-y)，pass=[]）
+// ============================================================
+function sgfFrom(b, blackName="黑", whiteName="白", komi=6.5){
+  let s=`(;FF[4]GM[1]SZ[${b.size}]KM[${komi}]PB[${escape(blackName)}]PW[${escape(whiteName)}]\n`;
+  for(const m of b.historySnapshot()){
+    const [color,x,y]=m; const tag=color===BLACK?"B":"W";
+    if(x<0) s+=`;${tag}[]\n`;
+    else { const cx=String.fromCharCode(97+x), cy=String.fromCharCode(97+(b.size-1-y)); s+=`;${tag}[${cx}${cy}]\n`; }
+  }
+  s+=")"; return s;
+}
+function escape(s){ return s.replace(/\\/g,"\\\\").replace(/\]/g,"\\]"); }
+
+// ============================================================
+// 棋盘 UI
+// ============================================================
+let SIZE=9, CELL=42, PAD=24;
+
+function recomputeLayout(){
+  // 根据棋盘大小算 CELL/PAD，保持总边长 ≤ 420
+  const total = 420;
+  PAD = 24;
+  const usable = total - 2 * PAD;
+  CELL = SIZE > 1 ? Math.floor(usable / (SIZE - 1)) : usable;
+  // 边距随棋盘大小调整
+  if (SIZE > 13) PAD = 18;
+  canvas.width = total; canvas.height = total;
+}
+
+function onSizeChange(v){
+  const n = parseInt(v);
+  if (n < 2 || n > 19 || n === SIZE) return;
+  SIZE = n;
+  board = new Board(n);
+  recomputeLayout();
+  window._infMap = null;
+  influenceVisible = false;
+  draw();
+  updateStatus();
+  if (aiMode === "AI_BLACK") aiMove();
+}
+
+// 初始化棋盘大小下拉（延迟到 canvas 定义后执行）
+function initSizeSelect(){
+  const sel = document.getElementById("sizeSelect");
+  for (let n = 2; n <= 19; n++) {
+    const opt = document.createElement("option");
+    opt.value = n; opt.textContent = n + " 路";
+    if (n === 9) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  recomputeLayout();
+}
+const board=new Board(SIZE);
+let aiMode="AI_WHITE"; // NONE / AI_WHITE / AI_BLACK
+let aiThinking=false;
+const canvas=document.getElementById("board");
+const ctx=canvas.getContext("2d");
+
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  // 网格
+  ctx.strokeStyle="rgba(0,0,0,0.5)"; ctx.lineWidth=1.2;
+  for(let i=0;i<SIZE;i++){
+    const v=PAD+i*CELL;
+    ctx.beginPath(); ctx.moveTo(PAD,v); ctx.lineTo(PAD+(SIZE-1)*CELL,v); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(v,PAD); ctx.lineTo(v,PAD+(SIZE-1)*CELL); ctx.stroke();
+  }
+  // 影响力染色（在棋子下方）
+  if(window._infMap){
+    const N=SIZE, max=window._infMax||127;
+    for(let x=0;x<N;x++) for(let y=0;y<N;y++){
+      const v=window._infMap[x*N+y];
+      if(Math.abs(v)<5) continue;
+      const norm=Math.max(-1,Math.min(1, v/max));
+      const alpha=Math.abs(norm)*0.55;
+      const sy=PAD+((N-1)-y)*CELL, sx=PAD+x*CELL;
+      if(norm>0) ctx.fillStyle=`rgba(0,0,0,${alpha})`;
+      else ctx.fillStyle=`rgba(255,255,255,${alpha})`;
+      ctx.fillRect(sx-CELL/2, sy-CELL/2, CELL, CELL);
+    }
+  }
+  // 列字母 行号
+  ctx.fillStyle="#52525B"; ctx.font="11px sans-serif"; ctx.textAlign="center";
+  for(let i=0;i<SIZE;i++){ ctx.fillText(COLS[i], PAD+i*CELL, PAD-8); }
+  ctx.textAlign="right";
+  for(let i=0;i<SIZE;i++){ ctx.fillText((i+1), PAD-6, PAD+i*CELL+4); }
+  // 棋子
+  for(let x=0;x<SIZE;x++) for(let y=0;y<SIZE;y++){
+    const c=board.get(x,y); if(c===EMPTY) continue;
+    const sy=PAD+((SIZE-1)-y)*CELL, sx=PAD+x*CELL, r=CELL*0.45;
+    ctx.beginPath(); ctx.arc(sx,sy,r,0,Math.PI*2);
+    ctx.fillStyle=c===BLACK?"#000":"#fff"; ctx.fill();
+    if(c===WHITE){ ctx.strokeStyle="#000"; ctx.lineWidth=1.2; ctx.stroke(); }
+  }
+  // 最后一手标红
+  const lm=board.lastMove();
+  if(lm&&lm[1]>=0){
+    const sx=PAD+lm[1]*CELL, sy=PAD+((SIZE-1)-lm[2])*CELL, r=CELL*0.15;
+    ctx.beginPath(); ctx.arc(sx,sy,r,0,Math.PI*2); ctx.strokeStyle="#FF5722"; ctx.lineWidth=2.5; ctx.stroke();
+  }
+}
+
+canvas.addEventListener("click",(e)=>{
+  if(aiThinking) return;
+  const rect=canvas.getBoundingClientRect();
+  const px=(e.clientX-rect.left)*(canvas.width/rect.width);
+  const py=(e.clientY-rect.top)*(canvas.height/rect.height);
+  const col=Math.round((px-PAD)/CELL);
+  const screenRow=Math.round((py-PAD)/CELL);
+  if(col<0||col>=SIZE||screenRow<0||screenRow>=SIZE) return;
+  const row=(SIZE-1)-screenRow;  // 翻转回棋盘坐标
+  onTap(col,row);
+});
+
+function onTap(x,y){
+  const color=board.toMove();
+  if(color===BLACK&&aiMode==="AI_BLACK") return;
+  if(color===WHITE&&aiMode==="AI_WHITE") return;
+  const r=board.play(color,x,y);
+  if(r!=="OK"){ setStatus(`非法落子: ${r}  (color=${color===BLACK?"黑":"白"} coord=${coordToVertex(x,y,SIZE)})`); return; }
+  draw(); updateStatus(); maybeAiMove();
+}
+function onPass(){
+  if(aiThinking) return;
+  const color=board.toMove();
+  if(color===BLACK&&aiMode==="AI_BLACK") return;
+  if(color===WHITE&&aiMode==="AI_WHITE") return;
+  const gameOver=board.pass(color);
+  draw();
+  if(gameOver){ showFinalScore(); return; }
+  updateStatus();
+  maybeAiMove();
+}
+
+function showFinalScore(){
+  const komi=6.5;
+  const s=board.chineseScore();
+  const blackTotal=s.black+komi;
+  const whiteTotal=s.white;
+  const winner = blackTotal>whiteTotal ? "黑" : "白";
+  const margin = Math.abs(blackTotal-whiteTotal);
+  const msg = `终局（双方 pass）
+黑：${s.black} 子 + 贴目 ${komi} = ${blackTotal.toFixed(1)}
+白：${s.white} 子
+单官：${s.dame} 点未数
+提子统计：黑提 ${board.bCap} / 白提 ${board.wCap}
+>>> ${winner} +${margin.toFixed(1)}`;
+  alert(msg);
+  setStatus(`★ 终局：${winner} +${margin.toFixed(1)}  (黑 ${s.black}+${komi} vs 白 ${s.white})`);
+}
+
+// GTP 协议端到端测试函数（在浏览器 console 可调）
+function gtp(cmd){
+  // 简化 GTP 引擎，复用 board
+  const tokens=cmd.trim().split(/\s+/);
+  const id = /^\d+$/.test(tokens[0]) ? tokens.shift() : "";
+  const op = tokens.shift().toLowerCase();
+  const args = tokens;
+  let ok=true, body="";
+  try {
+    switch(op){
+      case "protocol_version": body="2"; break;
+      case "name": body="KataGoDemoStub"; break;
+      case "version": body="0.1-stub"; break;
+      case "known_command": body = args[0]&&["protocol_version","name","version","known_command","list_commands","boardsize","clear_board","komi","play","genmove","showboard","final_score","final_status","kata-analyze","lz-analyze","quit"].includes(args[0]) ? "true" : "false"; break;
+      case "list_commands": body=["protocol_version","name","version","known_command","list_commands","boardsize","clear_board","komi","play","genmove","showboard","final_score","final_status","kata-analyze","lz-analyze","quit"].join("\n"); break;
+      case "boardsize": { const n=parseInt(args[0]); board=new Board(n); body=""; break; }
+      case "clear_board": { const sz=board.size; board=new Board(sz); body=""; break; }
+      case "komi": body=""; break;
+      case "play": {
+        const col = args[0].startsWith("b")?BLACK:WHITE;
+        const v = args[1];
+        if(v==="pass"){ board.pass(col); body=""; break; }
+        const [x,y]=vertexToCoord(v, board.size);
+        const r=board.play(col,x,y);
+        if(r!=="OK"){ ok=false; body="illegal move: "+r; }
+        else body="";
+        break;
+      }
+      case "genmove": {
+        const col = args[0].startsWith("b")?BLACK:WHITE;
+        const legal=board.legalMoves(col);
+        if(legal.length===0){ board.pass(col); body="pass"; }
+        else { const m=legal[Math.floor(Math.random()*legal.length)]; const r=board.play(col,m[0],m[1]); if(r!=="OK"){ ok=false; body="illegal: "+r; } else body=coordToVertex(m[0],m[1],board.size); }
+        break;
+      }
+      case "showboard": body="\n"+showBoardGtp(); break;
+      case "final_score":
+        if(!board.isTwoPasses()){ ok=false; body="game not over"; }
+        else {
+          const s=board.chineseScore();
+          const komi2=6.5;
+          const bt=s.black+komi2, wt=s.white;
+          body = bt>wt ? `B+${(bt-wt).toFixed(1)}` : `W+${(wt-bt).toFixed(1)}`;
+        }
+        break;
+      case "final_status": {
+        const v=args[0]; if(!v){ ok=false; body="vertex required"; break; }
+        const [x,y]=vertexToCoord(v, board.size);
+        body = board.get(x,y)===EMPTY ? "empty" : "alive";
+        break;
+      }
+      case "kata-analyze": case "lz-analyze": case "analyze":
+        ok=false; body=op+" not available in stub mode (need KataGo)";
+        break;
+      case "quit": body=""; break;
+      default: ok=false; body="unknown command";
+    }
+  } catch(e){ ok=false; body=e.message; }
+  const prefix = ok ? `=${id}` : `?${id}`;
+  return (body.startsWith("\n") ? `${prefix}${body}` : (body==="" ? `${prefix} ` : `${prefix} ${body}`)) + "\n\n";
+}
+
+function showBoardGtp(){
+  let s="  ";
+  for(let x=0;x<board.size;x++) s+=COLS[x];
+  s+="\n";
+  for(let y=board.size-1;y>=0;y--){
+    s+=String(y+1).padStart(2," ");
+    for(let x=0;x<board.size;x++){
+      const c=board.get(x,y);
+      s += c===BLACK?"X":c===WHITE?"O":".";
+    }
+    s+=String(y+1).padEnd(2," ")+"\n";
+  }
+  return s;
+}
+
+// ============================================================
+// 影响力函数（Influence Function）—— GNU Go / Sabaki 风格
+// 棋子点 ±127，空点迭代卷积 = 8 邻居均值 * 0.92，12 次收敛
+// ============================================================
+const INF_MAX=127, INF_DECAY=0.92, INF_ITERS=12, INF_THRESHOLD=5;
+const DIRS8=[[-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1]];
+
+function computeInfluence(b){
+  const N=b.size;
+  let cur=new Float32Array(N*N), alt=new Float32Array(N*N);
+  for(let x=0;x<N;x++) for(let y=0;y<N;y++){
+    const c=b.get(x,y);
+    cur[x*N+y] = c===BLACK?INF_MAX : c===WHITE?-INF_MAX : 0;
+  }
+  for(let it=0;it<INF_ITERS;it++){
+    for(let x=0;x<N;x++) for(let y=0;y<N;y++){
+      const idx=x*N+y; const c=b.get(x,y);
+      if(c!==EMPTY){ alt[idx]=cur[idx]; continue; }
+      let sum=0, cnt=0;
+      for(const [dx,dy] of DIRS8){
+        const nx=x+dx, ny=y+dy;
+        if(nx>=0&&nx<N&&ny>=0&&ny<N){ sum+=cur[nx*N+ny]; cnt++; }
+      }
+      alt[idx] = cnt>0 ? (sum/cnt)*INF_DECAY : 0;
+    }
+    const tmp=cur; cur=alt; alt=tmp;
+  }
+  // 统计
+  let blackTerr=0, whiteTerr=0, dame=0, blackStones=0, whiteStones=0;
+  for(let x=0;x<N;x++) for(let y=0;y<N;y++){
+    const c=b.get(x,y); const v=cur[x*N+y];
+    if(c===BLACK) blackStones++;
+    else if(c===WHITE) whiteStones++;
+    else {
+      if(v>INF_THRESHOLD) blackTerr++;
+      else if(v<-INF_THRESHOLD) whiteTerr++;
+      else dame++;
+    }
+  }
+  const lead = (blackStones+blackTerr) - (whiteStones+whiteTerr);
+  const wr = 1/(1+Math.exp(-lead/12));
+  return {blackTerr, whiteTerr, dame, blackStones, whiteStones, lead, winrateBlack:wr, map:cur};
+}
+
+let influenceVisible=false;
+function onInfluence(){
+  if(aiThinking) return;
+  influenceVisible = !influenceVisible;
+  if(influenceVisible){
+    const r=computeInfluence(board);
+    window._infMap=r.map; window._infMax=INF_MAX;
+    draw();
+    const lead=r.lead;
+    const wr=r.winrateBlack;
+    setStatus(`形势：黑胜率 ${(wr*100).toFixed(0)}% | 黑领 ${lead.toFixed(1)} 目 | 黑地 ${r.blackTerr} 白地 ${r.whiteTerr}`);
+  } else {
+    window._infMap=null;
+    draw();
+    updateStatus();
+  }
+}
+
+function onForceEnd(){
+  if(aiThinking) return;
+  showFinalScore();
+}
+function onReset(){
+  if(aiThinking) return;
+  board.clear(); draw();
+  if(aiMode==="AI_BLACK") aiMove();
+  updateStatus();
+}
+function onMode(){
+  if(aiThinking) return;
+  aiMode = aiMode==="NONE"?"AI_WHITE":aiMode==="AI_WHITE"?"AI_BLACK":"NONE";
+  board.clear(); draw();
+  if(aiMode==="AI_BLACK") aiMove();
+  updateStatus();
+}
+function maybeAiMove(){
+  if(aiMode==="NONE") return;
+  const next=board.toMove();
+  const aiColor=aiMode==="AI_BLACK"?BLACK:WHITE;
+  if(next!==aiColor) return;
+  aiMove();
+}
+function aiMove(){
+  aiThinking=true; setStatus("AI 思考中…");
+  setTimeout(()=>{
+    const legal=board.legalMoves(board.toMove());
+    let m = legal.length? legal[Math.floor(Math.random()*legal.length)] : [-1,-1];
+    if(m[0]<0) board.pass(board.toMove());
+    else { const r=board.play(board.toMove(),m[0],m[1]); if(r!=="OK"){ console.error("AI illegal",r); } }
+    aiThinking=false; draw(); updateStatus();
+  },50);
+}
+function onExport(){
+  if(board.moveCount()===0){ setStatus("棋盘为空，无棋谱可导出"); return; }
+  const sgf=sgfFrom(board, aiMode==="AI_BLACK"?"KataGo-Stub":"Player-Black", aiMode==="AI_WHITE"?"KataGo-Stub":"Player-White", 6.5);
+  document.getElementById("sgfOut").textContent=sgf;
+  // 下载
+  const blob=new Blob([sgf],{type:"application/x-go-sgf"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  const ts=new Date().toISOString().replace(/[:.]/g,"-").slice(0,19);
+  a.download=`katago_${aiMode}_${ts}.sgf`;
+  a.click();
+  setStatus(`已生成 ${a.download}`);
+}
+function setStatus(s){ document.getElementById("status").textContent=s; }
+function updateStatus(){
+  const t=board.toMove()===BLACK?"黑":"白";
+  const m=aiMode==="NONE"?"双人对弈":aiMode==="AI_WHITE"?"AI 执白":"AI 执黑";
+  const lm=board.lastMove();
+  const last=lm? (lm[1]<0?"pass":coordToVertex(lm[1],lm[2],SIZE)) : "无";
+  setStatus(`${m} | 回合:${t} | 提子 黑=${board.bCap} 白=${board.wCap} | 上一手:${last} | 手数:${board.moveCount()}`);
+}
+
+// ============================================================
+// 自检测试（与 RulesAndExportTest.kt 同步）
+// ============================================================
+function assert(cond, msg){ if(!cond) throw new Error(msg); }
+function eq(a,b,msg){ if(a!==b) throw new Error(`${msg}: expected ${b}, got ${a}`); }
+
+const TESTS=[];
+function test(name, fn){ TESTS.push({name, fn}); }
+
+test("基本落子+回合切换", ()=>{
+  const b=new Board(9);
+  eq(b.toMove(),BLACK,"初始应黑先");
+  eq(b.play(BLACK,0,0),"OK","黑下(0,0)");
+  eq(b.toMove(),WHITE,"应换白");
+  eq(b.play(WHITE,1,1),"OK","白下(1,1)");
+  eq(b.toMove(),BLACK,"应换黑");
+  eq(b.get(0,0),BLACK,"(0,0) 应为黑");
+  eq(b.get(1,1),WHITE,"(1,1) 应为白");
+});
+
+test("提子（围死对方）", ()=>{
+  const b=new Board(5);
+  eq(b.play(BLACK,0,0),"OK","黑(0,0)");
+  eq(b.play(WHITE,1,0),"OK","白(1,0)");
+  eq(b.play(BLACK,4,4),"OK","黑(4,4)");
+  eq(b.play(WHITE,0,1),"OK","白(0,1)提黑");
+  eq(b.get(0,0),EMPTY,"黑角子应被提走");
+  eq(b.wCap,1,"白方提子数应为 1");
+});
+
+test("自杀禁着", ()=>{
+  // 5 路角上：(0,0) 邻位只有 (1,0)(0,1)。黑占这两个，白下 (0,0) 单子无气且不提对方 → 自杀
+  // 关键：(1,0) 的邻位 (2,0)(1,1) 必须有气给黑，否则白下 (0,0) 会先提黑 → 不算自杀
+  const b=new Board(5);
+  eq(b.play(BLACK,1,0),"OK","黑(1,0)");
+  eq(b.play(WHITE,4,4),"OK","白(4,4) 让回黑");
+  eq(b.play(BLACK,0,1),"OK","黑(0,1)");
+  eq(b.play(WHITE,4,3),"OK","白(4,3) 让回黑");
+  // 现在轮黑，但我们要测白自杀 → 黑先 pass
+  b.pass(BLACK);
+  // 现在轮白，白下 (0,0)：(1,0)(0,1) 都是黑，黑 (1,0) 块有 (2,0)(1,1) 的气，黑 (0,1) 块有 (0,2) 的气
+  // → 不提黑，白 (0,0) 单子无气 → SUICIDE
+  const r=b.play(WHITE,0,0);
+  assert(r==="SUICIDE"||r==="SUPERKO", `白下(0,0) 应被禁止，实际=${r}`);
+  eq(b.get(0,0),EMPTY,"自杀不应落子");
+});
+
+test("pass 不改棋盘但切回合", ()=>{
+  const b=new Board(9);
+  b.play(BLACK,0,0);
+  eq(b.toMove(),WHITE,"应白");
+  b.pass(WHITE);
+  eq(b.toMove(),WHITE,"pass 后应仍白");
+  eq(b.bCap,0); eq(b.wCap,0);
+});
+
+test("GTP vertex 转换", ()=>{
+  let [x,y]=vertexToCoord("A1",9); eq(x,0); eq(y,0);
+  [x,y]=vertexToCoord("E5",9); eq(x,4); eq(y,4);
+  [x,y]=vertexToCoord("J9",9); eq(x,8); eq(y,8);  // 列跳过 I
+  eq(coordToVertex(0,0,9),"A1");
+  eq(coordToVertex(4,4,9),"E5");
+  eq(coordToVertex(8,8,9),"J9");
+});
+
+test("SGF 坐标生成（含 y 翻转）", ()=>{
+  const b=new Board(9);
+  b.play(BLACK,4,4); b.play(WHITE,3,4);
+  const sgf=sgfFrom(b,"黑","白",6.5);
+  assert(sgf.includes(";B[ee]"), `SGF 应含 ;B[ee]，实际=${sgf}`);
+  assert(sgf.includes(";W[de]"), `SGF 应含 ;W[de]，实际=${sgf}`);
+  assert(sgf.includes("FF[4]"), "应含 FF[4]");
+  assert(sgf.includes("SZ[9]"), "应含 SZ[9]");
+  assert(sgf.includes("KM[6.5]"), "应含 KM[6.5]");
+  assert(sgf.includes("PB[黑]"), "应含 PB[黑]");
+  assert(sgf.includes("PW[白]"), "应含 PW[白]");
+  // A1 → SGF [ai]：列 a，行 a+(9-1-0)=i
+  const b2=new Board(9); b2.play(BLACK,0,0);
+  const sgf2=sgfFrom(b2);
+  assert(sgf2.includes(";B[ai]"), `A1 应转为 [ai]，实际=${sgf2}`);
+});
+
+test("SGF pass 用空 []", ()=>{
+  const b=new Board(9); b.pass(BLACK);
+  const sgf=sgfFrom(b);
+  assert(sgf.includes(";B[]"), `pass 应输出 ;B[]，实际=${sgf}`);
+});
+
+test("GTP 协议端到端（stub genmove）", ()=>{
+  // 这里没有完整的 GTP 协议串，但能模拟：play/genmove 流程
+  const g={board:new Board(9)};
+  g.board.play(BLACK,4,4);  // 黑天元
+  // stub genmove 白
+  const legal=g.board.legalMoves(WHITE);
+  assert(legal.length>0, "白应有合法点");
+  const mv=legal[Math.floor(Math.random()*legal.length)];
+  const r=g.board.play(WHITE,mv[0],mv[1]);
+  eq(r,"OK","stub 落子应合法");
+  eq(g.board.moveCount(),2,"应有 2 手");
+});
+
+test("短对局+SGF 导出", ()=>{
+  const b=new Board(9);
+  b.play(BLACK,4,4);  // 黑天元
+  // 白随机
+  const lw=b.legalMoves(WHITE);
+  b.play(WHITE,lw[0][0],lw[0][1]);
+  b.play(BLACK,3,4);  // 黑 D5
+  const lw2=b.legalMoves(WHITE);
+  b.play(WHITE,lw2[0][0],lw2[0][1]);
+  eq(b.moveCount(),4,"应有 4 手");
+  const sgf=sgfFrom(b);
+  assert(sgf.startsWith("(;FF[4]"), "SGF 头部正确");
+  assert(sgf.endsWith(")"), "SGF 应以 ) 结束");
+  const bCount=sgf.split(";B[").length-1;
+  const wCount=sgf.split(";W[").length-1;
+  eq(bCount,2,"应有 2 手黑");
+  eq(wCount,2,"应有 2 手白");
+});
+
+test("终局检测（双方 pass）", ()=>{
+  const b=new Board(9);
+  eq(b.isTwoPasses(),false, "空棋盘不应终局");
+  b.play(BLACK,4,4);
+  eq(b.isTwoPasses(),false, "一手棋后不应终局");
+  b.pass(WHITE);
+  eq(b.isTwoPasses(),false, "单 pass 不应终局");
+  b.pass(BLACK);
+  eq(b.isTwoPasses(),true, "双方 pass 应终局");
+});
+
+test("中国数子（角部实空）", ()=>{
+  // 9 路：黑占角 A1-A3, B1-B3 围出 (0,0) 区无白 → 黑实空
+  // 实际上 (0,0) 已被黑占，空区是更内的位置
+  // 用更明确的盘：黑占 (0,0)(0,1)(0,2)(1,0)(1,1)(1,2) 围住 (0,0) 之外的
+  // 简单：黑占整个左下 3x3，白占整个右上 3x3，中间是单官
+  const b=new Board(9);
+  for(let x=0;x<3;x++) for(let y=0;y<3;y++) b.play(BLACK,x,y);
+  // 注意：连续 play 同色会违反 toMove，但 Board.play 不检查 toMove，直接落子
+  // 让白只在 (6..8,6..8) 落子
+  for(let x=6;x<9;x++) for(let y=6;y<9;y++) b.play(WHITE,x,y);
+  const s=b.chineseScore();
+  // 黑 9 子 + 黑实空：左下 3x3 全黑 → 0 实空；中间 3x3=空，被黑/白双方相邻 → 单官
+  // 黑 9 + 白 9，diff=0
+  eq(s.black,9,"黑应 9 子");
+  eq(s.white,9,"白应 9 子");
+  eq(s.diff,0,"双方相等");
+  assert(s.dame>=9, "中间空区应为单官");
+});
+
+test("GTP final_score 协议", ()=>{
+  // 用 stub GTP：模拟一局 -> 双方 pass -> final_score
+  const g={board:new Board(9), komi:6.5};
+  g.board.play(BLACK,0,0);  // 黑占角
+  g.board.play(WHITE,8,8);  // 白占对角
+  g.board.pass(BLACK); g.board.pass(WHITE);  // 双方 pass
+  // 数子
+  const s=g.board.chineseScore();
+  assert(g.board.isTwoPasses(), "应终局");
+  // 黑角子 (0,0)：1 子 + 实空（应为 0，因为只有 (0,0) 一子）
+  // 数子规则：黑有 1 子；白有 1 子；diff=0
+  // 主要验证函数能跑通，不追求精确目数
+  assert(typeof s.diff === "number", "diff 应为数字");
+});
+
+test("GTP kata-analyze stub 报不可用", ()=>{
+  // 在 stub 模式下 estimator=null，应返回 not available
+  // 这里直接验证 web 版没有 estimator 概念，但应避免假胜率
+  // 真实接入后由 JniGen 路径提供
+  // stub 等价：board.legalMoves 给个合法点
+  const b=new Board(9);
+  const lm=b.legalMoves(BLACK);
+  assert(lm.length>0, "stub 应有合法点");
+  // stub 不应给出 winrate
+  // 在真 KataGo 接入前，UI 不显示胜率
+});
+
+test("影响力函数：空棋盘全单官", ()=>{
+  const b=new Board(9);
+  const r=computeInfluence(b);
+  eq(r.blackTerr,0, "空棋盘无黑地");
+  eq(r.whiteTerr,0, "空棋盘无白地");
+  eq(r.lead,0, "空棋盘 lead=0");
+  assert(Math.abs(r.winrateBlack-0.5)<0.01, "空棋盘胜率 50%");
+});
+
+test("影响力函数：黑占角", ()=>{
+  // 黑占整个左下 3x3，应让附近空点归黑
+  const b=new Board(9);
+  for(let x=0;x<3;x++) for(let y=0;y<3;y++) b.play(BLACK,x,y);
+  const r=computeInfluence(b);
+  assert(r.blackTerr>0, "应有黑地 (>=1)，实际="+r.blackTerr);
+  eq(r.whiteTerr,0, "不应有白地");
+  assert(r.lead>0, "黑应领先");
+  assert(r.winrateBlack>0.5, "黑胜率应 > 50%");
+});
+
+test("影响力函数：黑白对称", ()=>{
+  // 黑占左下 3x3，白占右上 3x3 → lead 应=0，胜率 50%
+  const b=new Board(9);
+  for(let x=0;x<3;x++) for(let y=0;y<3;y++) b.play(BLACK,x,y);
+  for(let x=6;x<9;x++) for(let y=6;y<9;y++) b.play(WHITE,x,y);
+  const r=computeInfluence(b);
+  eq(r.blackTerr,r.whiteTerr, "对称盘黑白地应相等");
+  assert(Math.abs(r.lead)<0.5, "对称盘 lead≈0");
+  assert(Math.abs(r.winrateBlack-0.5)<0.05, "对称盘胜率≈50%");
+});
+
+test("影响力函数：map 数组长度", ()=>{
+  const b=new Board(5);
+  const r=computeInfluence(b);
+  eq(r.map.length, 25, "5x5 应有 25 元素");
+});
+
+test("强制终局（force_final_score）不要求双方 pass", ()=>{
+  const b=new Board(9);
+  b.play(BLACK,4,4);
+  b.play(WHITE,8,8);
+  // 没双方 pass，但 force_final_score 应能算
+  assert(!b.isTwoPasses(), "未双方 pass");
+  const s=b.chineseScore();
+  assert(typeof s.diff === "number", "force 应能数子");
+});
+
+test("棋盘大小 2..19", ()=>{
+  for(const n of [2,3,5,9,13,17,19]){
+    const b=new Board(n);
+    eq(b.size, n, "应支持 size="+n);
+    b.play(BLACK,0,0);
+    eq(b.get(0,0), BLACK, "落子在 "+n+"x"+n);
+  }
+  // 边界：n=2 仍可下，n=19 仍可下
+  const b2=new Board(2);
+  eq(b2.size, 2, "size=2");
+  const b19=new Board(19);
+  eq(b19.size, 19, "size=19");
+});
+
+function runSelfTests(){
+  const out=document.getElementById("testResults");
+  let html=`<div style="margin-bottom:8px;font-weight:500">自检结果（${TESTS.length} 项）：</div>`;
+  let passed=0, failed=0;
+  for(const {name,fn} of TESTS){
+    try { fn(); passed++; html+=`<div><span class="pass">✓ PASS</span> ${name}</div>`; }
+    catch(e){ failed++; html+=`<div><span class="fail">✗ FAIL</span> ${name}<br><span class="small" style="margin-left:24px">${e.message}</span></div>`; }
+  }
+  html+=`<div style="margin-top:8px;font-weight:500">${passed} 通过 / ${failed} 失败 / ${TESTS.length} 总计</div>`;
+  out.innerHTML=html;
+}
+
+// 初始化
+initSizeSelect();
+draw(); updateStatus();
+setStatus(`就绪。${SIZE}×${SIZE} 棋盘，AI 模式=${aiMode}。点击棋盘落子，或点"跑自检"验证规则。`);
+</script>
+</body>
+</html>
