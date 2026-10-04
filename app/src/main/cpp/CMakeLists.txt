@@ -10,70 +10,104 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ───────────────────────────────────────────────────────────────
 # STUB 模式（默认）：不依赖 KataGo 源码即可编译。
 #   genmove 返回随机合法点，用于先验证 UI → JNI → C++ → 回显 整条链路。
-# 真实模式：在 app/build.gradle.kts 的 cmake 块加：
-#   arguments += "-DUSE_REAL_KATAGO=ON"
-#   arguments += "-DKATAGO_SRC=/abs/path/to/karino2/KataGo"
-#   arguments += "-DUSE_OPENCL=ON"
-#   （KATAGO_SRC 指向 karino2 fork 的克隆目录）
+#
+# 真实模式（EIGEN CPU 后端，karino2 已验证路径）：
+#   在 app/build.gradle.kts 的 cmake 块加：
+#     arguments += "-DUSE_REAL_KATAGO=ON"
+#     arguments += "-DKATAGO_SRC=/abs/path/to/KataGo"      # 上游 lightvector/KataGo 克隆
+#     arguments += "-DEIGEN_SRC=/abs/path/to/eigen-3.4.0"  # Eigen 头文件根目录
+#   （KATAGO_SRC 指向 lightvector/KataGo 仓库根目录，包含 cpp/ 和 external/）
 # ───────────────────────────────────────────────────────────────
-option(USE_REAL_KATAGO "Link against real KataGo (karino2 fork)" OFF)
-option(USE_OPENCL      "Enable OpenCL backend (real mode)"        OFF)
+option(USE_REAL_KATAGO "Link against real KataGo (EIGEN CPU backend)" OFF)
 
-# 永远编译的本地源：JNI 桥 + 引擎封装 + OpenCL 动态加载器
+# 永远编译的本地源：JNI 桥 + 引擎封装
 add_library(katago SHARED
     jni_bridge.cpp
     katago_engine.cpp
-    opencl_loader.cpp
 )
 
 # Android 系统库
 find_library(log-lib log)   # android/log.h
-find_library(dl-lib  dl)     # dlopen / dlsym
+find_library(dl-lib  dl)     # dlopen / dlsym（保留给将来 OpenCL/NNAPI 路径用）
 target_link_libraries(katago ${log-lib} ${dl-lib})
 
 if(USE_REAL_KATAGO)
     if(NOT KATAGO_SRC)
-        message(FATAL_ERROR "USE_REAL_KATAGO=ON 但未提供 KATAGO_SRC")
+        message(FATAL_ERROR "USE_REAL_KATAGO=ON 但未提供 KATAGO_SRC（指向 lightvector/KataGo 仓库根）")
+    endif()
+    if(NOT EIGEN_SRC)
+        message(FATAL_ERROR "USE_REAL_KATAGO=ON 但未提供 EIGEN_SRC（指向 eigen-3.4.0 解压目录）")
     endif()
 
-    # karino2 fork 的源码布局（与上游 lightvector/KataGo 一致）：
-    #   ${KATAGO_SRC}/cpp/        —— 引擎主源（含 core/、search/、game/、neuralnet/ 等）
-    #   ${KATAGO_SRC}/external/   —— Eigen、json.hpp、clBLAST 头等
+    # ─── KataGo 源文件（按 karino2 已验证的最小集） ───────────────
+    # 排除 distributed/（在线训练，APK 不需要）
+    # 排除 tests/（单元测试）
+    # 排除 command/selfplay.cpp、command/contribute.cpp、command/match.cpp、command/gatekeeper.cpp
+    #   （APK 只用 gtp 子命令；这些会拖入 libzip/OpenSSL 依赖）
+    # 排除 neuralnet/cudabackend.cpp 等 GPU 后端（USE_EIGEN_BACKEND 时编译开关已屏蔽，保留无害）
+    file(GLOB KATAGO_CORE    ${KATAGO_SRC}/cpp/core/*.cpp)
+    file(GLOB KATAGO_GAME    ${KATAGO_SRC}/cpp/game/*.cpp)
+    file(GLOB KATAGO_NN      ${KATAGO_SRC}/cpp/neuralnet/*.cpp)
+    file(GLOB KATAGO_SEARCH  ${KATAGO_SRC}/cpp/search/*.cpp)
+    file(GLOB KATAGO_PROGRAM ${KATAGO_SRC}/cpp/program/*.cpp)
+    file(GLOB KATAGO_DATAIO  ${KATAGO_SRC}/cpp/dataio/*.cpp)
+    file(GLOB KATAGO_BOOK    ${KATAGO_SRC}/cpp/book/*.cpp)
+    set(KATAGO_MAIN_CPP ${KATAGO_SRC}/cpp/main.cpp)
+
+    target_sources(katago PRIVATE
+        ${KATAGO_MAIN_CPP}
+        ${KATAGO_CORE}
+        ${KATAGO_GAME}
+        ${KATAGO_NN}
+        ${KATAGO_SEARCH}
+        ${KATAGO_PROGRAM}
+        ${KATAGO_DATAIO}
+        ${KATAGO_BOOK}
+        # 不加 command/*.cpp（GTP 命令处理我们自己在 katago_engine.cpp 里做）
+        # 不加 distributed/*.cpp（在线训练，APK 不需要）
+        # 不加 tests/*.cpp
+    )
+
+    # ─── 头文件搜索路径 ─────────────────────────────────────────
     target_include_directories(katago PRIVATE
         ${KATAGO_SRC}/cpp
         ${KATAGO_SRC}/external
-        ${KATAGO_SRC}/external/eigen
-        ${KATAGO_SRC}/external/clblast/include
+        ${KATAGO_SRC}/external/nlohmann_json
+        ${KATAGO_SRC}/external/half-2.2.0/include
+        ${KATAGO_SRC}/external/filesystem-1.5.8/include
+        ${KATAGO_SRC}/external/tclap-1.2.5/include
+        ${EIGEN_SRC}
+        ${CMAKE_CURRENT_BINARY_DIR}  # program/gitinfo.h 生成位置
     )
 
+    # ─── 编译宏（karino2 已验证的 3 处改动）─────────────────────
     target_compile_definitions(katago PRIVATE
         USE_REAL_KATAGO
-        USE_OPENCL_BACKEND=$&lt;BOOL:${USE_OPENCL}&gt;
+        USE_EIGEN_BACKEND          # EIGEN CPU 后端
+        NO_LIBZIP                  # 不用 libzip（selfplay 才需要）
+        NO_GIT_REVISION            # 不查 git 信息
+        COMPILE_MAX_BOARD_LEN=50   # 支持到 19x19 即可
+        BYTE_ORDER=1234            # Android NDK 没定义 BYTE_ORDER，必须手动加
+        LITTLE_ENDIAN=1234
+        BIG_ENDIAN=4321
     )
 
-    # 把 karino2 fork 的 CMakeLists 中列出的 .cpp 逐一加入。
-    # 完整清单参见 ${KATAGO_SRC}/cpp/CMakeLists.txt，下面给出常用的最小集
-    # （足够跑 OpenCL 推理 + GTP），按需补全：
-    file(GLOB KATAGO_CPP
-        ${KATAGO_SRC}/cpp/*.cpp
-        ${KATAGO_SRC}/cpp/core/*.cpp
-        ${KATAGO_SRC}/cpp/game/*.cpp
-        ${KATAGO_SRC}/cpp/neuralnet/*.cpp
-        ${KATAGO_SRC}/cpp/search/*.cpp
-        ${KATAGO_SRC}/cpp/program/*.cpp
-        ${KATAGO_SRC}/cpp/distributed/*.cpp
+    # ─── zlib：NDK 自带 ────────────────────────────────────────
+    find_library(z-lib z)
+    target_link_libraries(katago ${z-lib})
+
+    # ─── Threads ────────────────────────────────────────────────
+    find_library(threads-lib pthread)
+    target_link_libraries(katago ${threads-lib})
+
+    # ─── 生成 program/gitinfo.h（KataGo 编译期需要）─────────────
+    # 上游用 add_custom_command 生成，这里手动写一个最小版本
+    file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/program/gitinfo.h
+        "#pragma once\n"
+        "namespace KataGoIO {\n"
+        "  inline const char* getGitRevision() { return \"android-build\"; }\n"
+        "  inline const char* getGitVersion()  { return \"1.18.2-android\"; }\n"
+        "  inline const char* getGitDate()     { return \"2026-10\"; }\n"
+        "}\n"
     )
-    target_sources(katago PRIVATE ${KATAGO_CPP})
-
-    # OpenCL：Android 端运行时 dlopen 加载 libOpenCL.so，不需要静态链接，
-    # 只在编译期需要头文件（clblast 提供 OpenCL headers）。
-    if(USE_OPENCL)
-        target_compile_definitions(katago PRIVATE USE_OPENCL=1)
-    endif()
-
-    # KataGo 依赖：zlib、libzip。NDK 自带 zlib；libzip 需交叉编译后
-    # 通过 add_library IMPORTED 引入，或用 NDK prebuilt 路径（见 chat 说明）。
-    # 此处省略具体 find_package，按你的 libzip 安装位置补：
-    # target_include_directories(katago PRIVATE /path/to/libzip/include)
-    # target_link_libraries(katago /path/to/libzip/lib/libzip.a z)
 endif()

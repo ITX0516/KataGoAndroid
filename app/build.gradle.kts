@@ -22,11 +22,16 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags += "-std=c++17"
+                // ─── 构建模式开关 ───────────────────────────────────────
                 // 默认 STUB 模式：不需要 KataGo 源码即可编译跑通。
-                // 接入真 KataGo 时改为：
+                //
+                // 接入真 KataGo（EIGEN CPU 后端，karino2 已验证路径）时，
+                // 解开下面 3 行注释，把路径换成你本地的：
                 //   arguments += "-DUSE_REAL_KATAGO=ON"
-                //   arguments += "-DKATAGO_SRC=/path/to/karino2/KataGo"
-                //   arguments += "-DUSE_OPENCL=ON"
+                //   arguments += "-DKATAGO_SRC=/path/to/KataGo"        // lightvector/KataGo 仓库根
+                //   arguments += "-DEIGEN_SRC=/path/to/eigen-3.4.0"    // Eigen 头文件根
+                //
+                // 详见 BUILDING.md
             }
         }
     }
