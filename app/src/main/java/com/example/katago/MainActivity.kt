@@ -63,7 +63,6 @@ class MainActivity : Activity() {
         }
 
         gtp = GtpEngine().also { it.execute("boardsize $boardSize") }
-        initKataGoEngine()
 
         boardView = findViewById(R.id.boardView)
         statusText = findViewById(R.id.statusText)
@@ -77,6 +76,9 @@ class MainActivity : Activity() {
 
         boardView.board = gtp.board
         boardView.onCellTapped = ::onTap
+
+        // 初始化 KataGo 引擎（必须在 statusText 之后，因为 flash() 要用）
+        initKataGoEngine()
 
         // 棋盘大小 Spinner：2..19
         val sizes = (2..19).toList()
