@@ -45,6 +45,20 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
             android:text="强制终局" />
+
+        <Button
+            android:id="@+id/aiModeBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="AI:随机" />
+
+        <Button
+            android:id="@+id/statusBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="状态" />
     </LinearLayout>
 
     <com.example.katago.BoardView

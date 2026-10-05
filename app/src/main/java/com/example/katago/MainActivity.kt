@@ -46,7 +46,12 @@ class MainActivity : Activity() {
     private lateinit var resetBtn: Button
     private lateinit var influenceBtn: Button
     private lateinit var forceEndBtn: Button
+    private lateinit var aiModeBtn: Button
+    private lateinit var statusBtn: Button
     private lateinit var sizeSpinner: Spinner
+
+    /** true = 用真 KataGo，false = 用 StubGen 随机 */
+    private var useRealKataGo: Boolean = true
 
     /** 当前是否显示影响力地图。再次点击形势判断按钮可关闭。 */
     private var showInfluence: Boolean = false
@@ -72,6 +77,8 @@ class MainActivity : Activity() {
         resetBtn    = findViewById(R.id.resetBtn)
         influenceBtn= findViewById(R.id.influenceBtn)
         forceEndBtn = findViewById(R.id.forceEndBtn)
+        aiModeBtn   = findViewById(R.id.aiModeBtn)
+        statusBtn   = findViewById(R.id.statusBtn)
         sizeSpinner = findViewById(R.id.sizeSpinner)
 
         boardView.board = gtp.board
@@ -109,6 +116,8 @@ class MainActivity : Activity() {
         resetBtn.setOnClickListener  { onReset() }
         influenceBtn.setOnClickListener { onInfluence() }
         forceEndBtn.setOnClickListener { onForceEnd() }
+        aiModeBtn.setOnClickListener   { toggleAiMode() }
+        statusBtn.setOnClickListener   { showStatusDialog() }
 
         // 如果 AI 执黑，开局让 AI 先下一手
         if (aiMode == AiMode.AI_BLACK) aiMove()
@@ -117,9 +126,18 @@ class MainActivity : Activity() {
 
     // ─── 初始化 KataGo 引擎 ────────────────────────────────────
     private fun initKataGoEngine() {
+        // 如果用户选了随机模式，直接用 StubGen
+        if (!useRealKataGo) {
+            kataEngine = null
+            gtp.gen = GtpEngine.StubGen()
+            updateAiModeButton()
+            AppLogger.i("MainActivity", "AI mode = Stub (user selected)")
+            return
+        }
+
         try {
             val filesDir = filesDir
-            // 1) 把 assets 里的模型 + 配置拷到 filesDir（assets 是只读的，KataGo 需要可写路径）
+            // 1) 把 assets 里的模型 + 配置拷到 filesDir
             copyAssetsToFiles("gtp.cfg", filesDir)
             copyAssetsToFiles("models/b10c384.bin", filesDir)
 
@@ -128,7 +146,9 @@ class MainActivity : Activity() {
 
             if (!File(modelPath).exists()) {
                 AppLogger.w("MainActivity", "initKataGoEngine: model not found, fallback to StubGen")
-                flash("未找到模型，AI 使用随机模式")
+                kataEngine = null
+                gtp.gen = GtpEngine.StubGen()
+                updateAiModeButton()
                 return
             }
 
@@ -137,18 +157,83 @@ class MainActivity : Activity() {
             if (kataEngine!!.isReady()) {
                 gtp.gen = GtpEngine.JniGen(kataEngine!!)
                 AppLogger.i("MainActivity", "KataGo engine READY (real mode)")
-                flash("AI 已就绪")
             } else {
                 val err = kataEngine!!.lastError()
                 AppLogger.e("MainActivity", "KataGo engine NOT ready: $err")
                 kataEngine = null
-                flash("AI 初始化失败: $err")
+                gtp.gen = GtpEngine.StubGen()
             }
+            updateAiModeButton()
         } catch (e: Throwable) {
             AppLogger.e("MainActivity", "initKataGoEngine failed, fallback to StubGen", e)
             kataEngine = null
-            flash("AI 初始化失败: ${e.message}")
+            gtp.gen = GtpEngine.StubGen()
+            updateAiModeButton()
         }
+    }
+
+    /** 根据当前状态更新 AI 模式按钮文字 */
+    private fun updateAiModeButton() {
+        val text = when {
+            !useRealKataGo        -> "AI:随机"
+            kataEngine != null    -> "AI:棋魂"
+            else                  -> "AI:随机"
+        }
+        aiModeBtn.text = text
+    }
+
+    /** 切换 AI 模式：Stub ↔ KataGo */
+    private fun toggleAiMode() {
+        useRealKataGo = !useRealKataGo
+        // 释放旧引擎
+        try { kataEngine?.close() } catch (_: Throwable) {}
+        kataEngine = null
+        initKataGoEngine()
+        updateStatus()
+    }
+
+    /** 弹出 KataGo 状态窗口 */
+    private fun showStatusDialog() {
+        val sb = StringBuilder()
+        sb.appendLine("=== KataGo 状态 ===")
+        sb.appendLine("用户选择: ${if (useRealKataGo) "真 KataGo" else "随机 Stub"}")
+        sb.appendLine("引擎对象: ${if (kataEngine != null) "已创建" else "null"}")
+
+        if (kataEngine != null) {
+            try {
+                sb.appendLine("isReady: ${kataEngine!!.isReady()}")
+                sb.appendLine("lastError: ${kataEngine!!.lastError()}")
+            } catch (e: Throwable) {
+                sb.appendLine("查询异常: ${e.message}")
+            }
+        } else {
+            sb.appendLine("isReady: false (未创建引擎)")
+        }
+
+        sb.appendLine()
+        sb.appendLine("=== 当前 AI 生成器 ===")
+        sb.appendLine(gtp.gen.javaClass.simpleName)
+
+        sb.appendLine()
+        sb.appendLine("=== 资源文件 ===")
+        val model = File(filesDir, "b10c384.bin")
+        val cfg = File(filesDir, "gtp.cfg")
+        sb.appendLine("模型: ${model.absolutePath}")
+        sb.appendLine("  存在=${model.exists()} 大小=${if (model.exists()) model.length() else 0} bytes")
+        sb.appendLine("配置: ${cfg.absolutePath}")
+        sb.appendLine("  存在=${cfg.exists()}")
+
+        sb.appendLine()
+        sb.appendLine("=== 棋局 ===")
+        sb.appendLine("棋盘大小: ${gtp.board.size}")
+        sb.appendLine("手数: ${gtp.board.moveCount()}")
+        sb.appendLine("当前回合: ${if (gtp.board.toMove() == Board.BLACK) "黑" else "白"}")
+
+        android.app.AlertDialog.Builder(this)
+            .setTitle("KataGo 状态")
+            .setMessage(sb.toString())
+            .setPositiveButton("确定", null)
+            .show()
     }
 
     private fun copyAssetsToFiles(name: String, dir: File) {
@@ -348,6 +433,7 @@ class MainActivity : Activity() {
         } ?: "无"
         val aiStr = if (kataEngine != null) "AI已就绪" else "AI随机模式"
         statusText.text = "$modeStr | $aiStr | 回合:$turnStr | 提子 黑=${gtp.board.blackCaptured} 白=${gtp.board.whiteCaptured} | 上一手:$lastStr"
+        updateAiModeButton()
     }
 
     private fun flash(msg: String) {
