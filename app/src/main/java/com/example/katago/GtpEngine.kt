@@ -33,23 +33,23 @@ class GtpEngine {
         }
     }
 
-    /**
-     * JNI 接入位（占位）：后续接 KataGoEngine 时实现此类，
-     * 然后在 MainActivity 把 `gtp.gen = JniGen(engine)` 即可，
-     * GtpEngine 与 BoardView 都不需要改。
-     *
-     * class JniGen(private val engine: KataGoEngine) : MoveGen {
-     *     override fun genmove(board: Board, color: Int): IntArray {
-     *         val flat = boardHistoryFlat(board)  // 把 history 平铺成 [color,x,y,...]
-     *         val mv = engine.genmove(board.size, color, flat)
-     *         return when {
-     *             mv == -2 -> intArrayOf(-1, -1)        // resign → pass 兜底
-     *             mv == -1 -> intArrayOf(-1, -1)
-     *             else -> intArrayOf(mv / board.size, mv % board.size)
-     *         }
-     *     }
-     * }
-     */
+    /** 真实 KataGo：把 Board 历史平铺成 [color,x,y,...] 传给 JNI。 */
+    class JniGen(private val engine: KataGoEngine) : MoveGen {
+        override fun genmove(board: Board, color: Int): IntArray {
+            val hist = board.historySnapshot()
+            val flat = IntArray(hist.size * 3)
+            for (i in hist.indices) {
+                flat[i * 3]     = hist[i][0]   // color
+                flat[i * 3 + 1] = hist[i][1]   // x
+                flat[i * 3 + 2] = hist[i][2]   // y
+            }
+            val mv = engine.genmove(board.size, color, flat)
+            return when (mv) {
+                -2, -1 -> intArrayOf(-1, -1)         // resign / pass
+                else   -> intArrayOf(mv / board.size, mv % board.size)
+            }
+        }
+    }
 
     /** 当前使用的生成器；可替换为 native 实现。 */
     var gen: MoveGen = StubGen()

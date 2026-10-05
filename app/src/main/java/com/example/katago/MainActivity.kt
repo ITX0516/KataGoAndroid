@@ -37,6 +37,7 @@ class MainActivity : Activity() {
     @Volatile private var aiThinking: Boolean = false   // AI 思考时禁止人下
 
     private lateinit var gtp: GtpEngine
+    private var kataEngine: KataGoEngine? = null   // null = 用 StubGen 兜底
     private lateinit var boardView: BoardView
     private lateinit var statusText: TextView
     private lateinit var passBtn: Button
@@ -62,6 +63,7 @@ class MainActivity : Activity() {
         }
 
         gtp = GtpEngine().also { it.execute("boardsize $boardSize") }
+        initKataGoEngine()
 
         boardView = findViewById(R.id.boardView)
         statusText = findViewById(R.id.statusText)
@@ -109,6 +111,43 @@ class MainActivity : Activity() {
         // 如果 AI 执黑，开局让 AI 先下一手
         if (aiMode == AiMode.AI_BLACK) aiMove()
         updateStatus()
+    }
+
+    // ─── 初始化 KataGo 引擎 ────────────────────────────────────
+    private fun initKataGoEngine() {
+        try {
+            val filesDir = filesDir
+            // 1) 把 assets 里的模型 + 配置拷到 filesDir（assets 是只读的，KataGo 需要可写路径）
+            copyAssetsToFiles("gtp.cfg", filesDir)
+            copyAssetsToFiles("models/b10c384.bin", filesDir)
+
+            val modelPath  = File(filesDir, "b10c384.bin").absolutePath
+            val configPath = File(filesDir, "gtp.cfg").absolutePath
+
+            if (!File(modelPath).exists()) {
+                AppLogger.w("MainActivity", "initKataGoEngine: model not found, fallback to StubGen")
+                flash("未找到模型，AI 使用随机模式")
+                return
+            }
+
+            // 2) 创建引擎（nativeInit 加载模型 + 配置）
+            kataEngine = KataGoEngine(modelPath, configPath)
+            gtp.gen = GtpEngine.JniGen(kataEngine!!)
+            AppLogger.i("MainActivity", "KataGo engine initialized OK")
+            flash("AI 已就绪")
+        } catch (e: Throwable) {
+            AppLogger.e("MainActivity", "initKataGoEngine failed, fallback to StubGen", e)
+            kataEngine = null
+            flash("AI 初始化失败: ${e.message}")
+        }
+    }
+
+    private fun copyAssetsToFiles(name: String, dir: File) {
+        val dst = File(dir, name.substringAfterLast('/'))
+        if (dst.exists()) return   // 已拷过就跳过，省 IO
+        assets.open(name).use { input ->
+            dst.outputStream().use { input.copyTo(it) }
+        }
     }
 
     // ─── 人落子 ────────────────────────────────────────────────
@@ -298,7 +337,8 @@ class MainActivity : Activity() {
                 else -> GtpEngine.coordToVertex(m[1], m[2], gtp.board.size)
             }
         } ?: "无"
-        statusText.text = "$modeStr | 回合:$turnStr | 提子 黑=${gtp.board.blackCaptured} 白=${gtp.board.whiteCaptured} | 上一手:$lastStr"
+        val aiStr = if (kataEngine != null) "AI已就绪" else "AI随机模式"
+        statusText.text = "$modeStr | $aiStr | 回合:$turnStr | 提子 黑=${gtp.board.blackCaptured} 白=${gtp.board.whiteCaptured} | 上一手:$lastStr"
     }
 
     private fun flash(msg: String) {
@@ -338,5 +378,10 @@ class MainActivity : Activity() {
         }
         startActivity(Intent.createChooser(intent, "导出 SGF"))
         flash("已生成 ${file.name}")
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try { kataEngine?.close() } catch (_: Throwable) {}
     }
 }
