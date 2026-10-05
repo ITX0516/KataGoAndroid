@@ -32,11 +32,15 @@ public:
 
     int genmove(int boardSize, int toMove, const int* moves, int moveCount);
 
+    bool isReady() const { return realMode_; }
+    const std::string& lastError() const { return lastError_; }
+
 private:
     bool   realMode_   = false;   // 是否启用了真 KataGo
     KataGo::Context* ctx_ = nullptr;  // 真模式下的 KataGo 上下文（nnEval/logger/cfg 等）
     std::string modelPath_;
     std::string configPath_;
+    std::string lastError_;   // initReal 失败时的错误信息
 
     int stubGenmove(int boardSize, int toMove, const int* moves, int moveCount);
     int realGenmove(int boardSize, int toMove, const int* moves, int moveCount);

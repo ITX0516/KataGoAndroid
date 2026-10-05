@@ -25,6 +25,12 @@ class KataGoEngine(
     fun genmove(boardSize: Int, toMove: Int, moveHistory: IntArray): Int =
         nativeGenmove(handle, boardSize, toMove, moveHistory)
 
+    /** 真 KataGo 是否加载成功。false 表示 fallback 到随机 stub。 */
+    fun isReady(): Boolean = nativeIsReady(handle)
+
+    /** 获取 C++ 层最近一次错误信息（isReady=false 时有值）。 */
+    fun lastError(): String = nativeGetLastError(handle)
+
     override fun close() {
         nativeDestroy(handle)
     }
@@ -34,6 +40,8 @@ class KataGoEngine(
     private external fun nativeGenmove(
         handle: Long, boardSize: Int, toMove: Int, moveHistory: IntArray
     ): Int
+    private external fun nativeIsReady(handle: Long): Boolean
+    private external fun nativeGetLastError(handle: Long): String
     private external fun nativeDestroy(handle: Long)
 
     companion object {

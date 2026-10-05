@@ -224,7 +224,8 @@ bool KataGoEngine::initReal() {
             Setup::SETUP_FOR_GTP
         );
         if(ctx_->nnEval == nullptr) {
-            LOGE("Setup::initializeNNEvaluator returned null");
+            lastError_ = "Setup::initializeNNEvaluator returned null (model load failed)";
+            LOGE("%s", lastError_.c_str());
             return false;
         }
         ctx_->logger->write("NN evaluator loaded, nnXLen=" +
@@ -241,12 +242,14 @@ bool KataGoEngine::initReal() {
              ctx_->params.numThreads);
         return true;
     } catch(const std::exception& e) {
-        LOGE("initReal exception: %s", e.what());
+        lastError_ = std::string("initReal exception: ") + e.what();
+        LOGE("%s", lastError_.c_str());
         delete ctx_;
         ctx_ = nullptr;
         return false;
     } catch(...) {
-        LOGE("initReal unknown exception");
+        lastError_ = "initReal unknown exception";
+        LOGE("%s", lastError_.c_str());
         delete ctx_;
         ctx_ = nullptr;
         return false;

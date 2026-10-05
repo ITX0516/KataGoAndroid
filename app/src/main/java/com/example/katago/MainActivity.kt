@@ -134,9 +134,16 @@ class MainActivity : Activity() {
 
             // 2) 创建引擎（nativeInit 加载模型 + 配置）
             kataEngine = KataGoEngine(modelPath, configPath)
-            gtp.gen = GtpEngine.JniGen(kataEngine!!)
-            AppLogger.i("MainActivity", "KataGo engine initialized OK")
-            flash("AI 已就绪")
+            if (kataEngine!!.isReady()) {
+                gtp.gen = GtpEngine.JniGen(kataEngine!!)
+                AppLogger.i("MainActivity", "KataGo engine READY (real mode)")
+                flash("AI 已就绪")
+            } else {
+                val err = kataEngine!!.lastError()
+                AppLogger.e("MainActivity", "KataGo engine NOT ready: $err")
+                kataEngine = null
+                flash("AI 初始化失败: $err")
+            }
         } catch (e: Throwable) {
             AppLogger.e("MainActivity", "initKataGoEngine failed, fallback to StubGen", e)
             kataEngine = null

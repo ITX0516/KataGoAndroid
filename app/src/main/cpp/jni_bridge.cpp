@@ -64,6 +64,23 @@ Java_com_example_katago_KataGoEngine_nativeGenmove(
     return move;
 }
 
+// 查询引擎是否真正加载成功（真 KataGo 模式）
+JNIEXPORT jboolean JNICALL
+Java_com_example_katago_KataGoEngine_nativeIsReady(
+        JNIEnv* /*env*/, jobject /*thiz*/, jlong handle) {
+    auto* engine = reinterpret_cast<KataGoEngine*>(handle);
+    return engine ? engine->isReady() : JNI_FALSE;
+}
+
+// 获取最近一次错误信息
+JNIEXPORT jstring JNICALL
+Java_com_example_katago_KataGoEngine_nativeGetLastError(
+        JNIEnv* env, jobject /*thiz*/, jlong handle) {
+    auto* engine = reinterpret_cast<KataGoEngine*>(handle);
+    if (!engine) return env->NewStringUTF("null engine");
+    return env->NewStringUTF(engine->lastError().c_str());
+}
+
 JNIEXPORT void JNICALL
 Java_com_example_katago_KataGoEngine_nativeDestroy(
         JNIEnv* /*env*/, jobject /*thiz*/, jlong handle) {
