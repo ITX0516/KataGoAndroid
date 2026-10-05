@@ -119,19 +119,13 @@ jobs:
           test -d eigen-3.4.0/Eigen && echo "Eigen ready: eigen-3.4.0/Eigen" || \
             (echo "ERROR: Eigen/Eigen not found" && exit 1)
 
-      # ─── EIGEN 模式：下载 KataGo 模型 ────────────────────────────
-      # 注意：CI 用一个小模型占位（lionffen b24c64），仅用于验证编译链路。
-      # 真机跑真 KataGo 请替换为 19x19 大模型（如 b18c384nbt），
-      # 放到 app/src/main/assets/models/b10c384.bin
-      - name: Download KataGo model (eigen mode)
+      # ─── EIGEN 模式：验证内置模型 ──────────────────────────────
+      # 模型已内置在 app/src/main/assets/models/b10c384.bin（lionffen b6c64，19x19，5.5MB）
+      - name: Verify built-in model (eigen mode)
         if: ${{ env.KATAGO_MODE == 'eigen' }}
         run: |
-          mkdir -p app/src/main/assets/models
-          MODEL_URL="https://media.katagotraining.org/uploaded/networks/models_extra/lionffen_b24c64_3x3_v3_12300.bin.gz"
-          echo "Downloading placeholder model (lionffen b24c64)..."
-          curl -fsSL -o /tmp/model.bin.gz "${MODEL_URL}"
-          gunzip -c /tmp/model.bin.gz > app/src/main/assets/models/b10c384.bin
           ls -lh app/src/main/assets/models/
+          test -f app/src/main/assets/models/b10c384.bin || { echo "ERROR: model not found"; exit 1; }
 
       # ─── 构建 APK ───────────────────────────────────────────────
       - name: Build APK
